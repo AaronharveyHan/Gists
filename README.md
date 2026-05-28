@@ -1,6 +1,29 @@
-# Gists Client
+# Gists Client · v0.2
 
-轻量级 GitHub Gist 桌面客户端。Tauri + React + Monaco Editor + SQLite，无任何系统级依赖（含 git）。
+**本地优先的代码片段工作台。** 离线全文搜索 · Monaco 编辑器 · AI 对话 · 代码执行 · 版本历史 · 无订阅费。
+
+基于 GitHub Gist 存储，数据完全本地化（SQLite），无任何系统级依赖（含 git）。
+
+<!-- SCREENSHOT: 主界面全貌（深色主题，侧边栏 + 编辑器 + AI 面板同时展开）
+     上传到 Issue 后，将下方 URL 替换为实际链接 -->
+![主界面](image/main.png)
+
+---
+
+## 为什么不用 GitHub 网页 / 现有客户端？
+
+| | Gists Client | GitHub 网页 | Lepton |
+|---|---|---|---|
+| 离线使用 | ✓ | ✗ | 部分 |
+| 本地全文搜索 | ✓ FTS5 | ✗ | ✗ |
+| AI 对话（自带模型） | ✓ | ✗ | ✗ |
+| 代码执行 | ✓ 7 种语言 | ✗ | ✗ |
+| 版本历史 + diff | ✓ | ✓（需联网）| ✗ |
+| 本地草稿（不发布）| ✓ | ✗ | ✗ |
+| 自定义标签 + 分类 | ✓ | ✗ | 部分 |
+| 关系图可视化 | ✓ | ✗ | ✗ |
+| 订阅费 | 免费 | 免费 | 免费 |
+| 数据存储位置 | 本地 SQLite | GitHub 服务器 | GitHub 服务器 |
 
 ---
 
@@ -23,6 +46,7 @@
   - [模板系统](#模板系统)
   - [代码运行](#代码运行)
   - [AI 助手](#ai-助手)
+  - [国际化（中英双语）](#国际化中英双语)
   - [关系图视图](#关系图视图)
   - [分享与嵌入](#分享与嵌入)
   - [命令面板](#命令面板)
@@ -70,7 +94,8 @@ npm run tauri build
 | **本地草稿** | 离线创建 gist · 联网后一键发布到 GitHub |
 | **模板系统** | 保存/管理模板 · 从模板新建 gist |
 | **代码运行** | 在编辑器内执行代码 · 流式输出 · 支持 10 种语言 |
-| **AI 助手** | 流式 AI 对话 · Explain / Optimize / Tags / Describe 快捷指令 |
+| **AI 助手** | 流式 AI 对话 · Explain / Optimize / Tags / Describe 快捷指令 · 对话历史持久化 · 导出对话为草稿 |
+| **国际化** | 中 / 英双语界面 · 设置中一键切换 · 默认中文 |
 | **关系图** | 力导向图展示 gist ↔ 标签关系 · 拖拽 · 缩放 · 悬停详情 |
 | **分享** | GitHub URL · HTML 嵌入 · Markdown 链接 · 原始文件 URL |
 | **标签 / 分类** | 自定义彩色标签 · 启发式 10 类自动分类 |
@@ -78,6 +103,18 @@ npm run tauri build
 | **全局搜索** | `Alt+Space` 浮动搜索窗口 · 系统托盘常驻 |
 | **统计** | 语言 / 分类 / 标签 / 月度活动可视化 |
 | **主题** | 跟随系统深浅色 · 多套 Monaco 主题 · Vim 模式 · 专注模式 |
+
+## 功能截图
+
+<!-- SCREENSHOT: AI 对话面板（流式输出 + 快捷指令）
+     建议用 GIF 录制 AI 流式回复的动态效果 -->
+![AI 助手](image/ai-panel.png)
+
+<!-- SCREENSHOT: 关系图视图（多节点，拖拽中状态）-->
+![关系图](image/graph.png)
+
+<!-- SCREENSHOT: 统计面板（语言分布 + 月度活动图）-->
+![统计面板](image/stats.png)
 
 ---
 
@@ -109,12 +146,22 @@ npm run tauri build
 
 ### 首次设置
 
-1. 启动应用后，进入 Token 配置页。
-2. 前往 GitHub → **Settings → Developer settings → Personal access tokens → Fine-grained tokens**（或 Classic tokens）。
-3. 勾选 **Gists** 读写权限，生成 token。
-4. 将 token 粘贴到输入框，点击 **Connect**。
-   - 应用会立即调用 `GET /user` 验证有效性，成功后 token 存入 OS 密钥链。
-5. 验证通过后自动进入主界面并开始首次全量同步。
+首次启动时会出现四步引导向导：
+
+| 步骤 | 内容 |
+|------|------|
+| **欢迎** | 应用简介与核心功能亮点 |
+| **Token** | 输入 GitHub Personal Access Token |
+| **同步** | 首次全量拉取进度展示 |
+| **完成** | 显示常用快捷键，进入主界面 |
+
+#### 生成 Token
+
+1. 前往 GitHub → **Settings → Developer settings → Personal access tokens → Fine-grained tokens**（或 Classic tokens）。
+2. 勾选 **Gists** 读写权限，生成 token。
+3. 将 token 粘贴到向导输入框，点击 **Connect**。
+   - 应用立即调用 `GET /user` 验证有效性，成功后 token 存入 OS 密钥链。
+4. 验证通过后自动开始首次全量同步。
 
 > Token 格式：必须以 `ghp_` / `ghu_` / `gho_` / `ghs_` / `github_pat_` 开头，长度 ≥ 20。
 
@@ -131,11 +178,19 @@ npm run tauri build
 | `⌘K` | 聚焦搜索框 |
 | `⌘R` | 增量同步（仅拉取变更） |
 | 工具栏 **Full** | 强制全量重新拉取所有 gist |
-| 右键 gist | 上下文菜单：固定/取消固定、复制链接、在浏览器打开、选中、删除 |
+| 右键 gist | 上下文菜单：固定/取消固定、在新标签页打开、切换到已开标签页、复制链接、在浏览器打开、选中、删除 |
 
 #### 固定置顶
 
 点击 gist 右侧的 **♦** 图标（或右键 → Pin to top）可将 gist 固定在列表顶部，再次点击取消。
+
+#### 多 Gist 标签页
+
+右键 gist → **在新标签页打开**，可同时打开多个 gist 进行对比或并行编辑：
+
+- 编辑器顶部出现标签栏，显示所有已开 gist 的描述/文件名。
+- 点击标签切换当前 gist；点击 **×** 关闭。
+- 若某 gist 已在标签页中，右键菜单变为 **切换到标签页**。
 
 #### 可拖拽侧边栏
 
@@ -380,6 +435,43 @@ npm run tauri build
 
 底部输入框可自由提问，`Enter` 发送（`Shift+Enter` 换行），AI 响应流式显示。
 
+#### 对话历史持久化
+
+每个 gist 的对话记录自动保存到 `localStorage`，重启应用后恢复：
+
+- 切换 gist 时面板自动加载该 gist 的历史对话。
+- 最多保留 **20 个** gist 的历史，每个 gist 最多 **60 条**消息（FIFO 淘汰）。
+
+#### 面板操作按钮（对话存在时显示）
+
+| 按钮 | 功能 |
+|------|------|
+| **导出** | 将当前对话格式化为 Markdown，保存为本地草稿 gist，自动在侧边栏中打开 |
+| **清空** | 确认后清除当前 gist 的全部对话记录 |
+
+---
+
+### 国际化（中英双语）
+
+应用界面支持中文和英文，默认使用中文。
+
+#### 切换语言
+
+工具栏 **Settings** → 顶部语言切换：选择 **中文** 或 **English**，界面即时切换，无需重启。偏好设置存入 `localStorage`，下次启动自动恢复。
+
+#### 覆盖范围
+
+| 命名空间 | 覆盖组件 |
+|----------|----------|
+| `common` | 通用操作按钮（保存、取消、删除…） |
+| `toolbar` | 工具栏所有按钮与同步状态提示 |
+| `sidebar` | 侧边栏搜索、排序、分类、标签操作 |
+| `editor` | 新建对话框、冲突横幅、草稿横幅 |
+| `ai` | AI 面板快捷指令、导出/清空按钮 |
+| `stats` | 统计面板所有标签与月份格式 |
+| `onboarding` | 引导向导全部步骤文案 |
+| `settings` | 设置弹窗各项标签 |
+
 ---
 
 ### 关系图视图
@@ -556,12 +648,16 @@ monaco-vim         — Vim 键位适配层
 gists-client/
 ├── src/                             # React 前端
 │   ├── api/tauri.ts                 # Tauri IPC 类型化封装（所有 invoke 调用）
+│   ├── i18n/
+│   │   └── translations.ts          # 中英双语翻译对象（8 个命名空间）
 │   ├── store/
 │   │   ├── useGistStore.ts          # 全局状态 + 异步 actions
 │   │   ├── useThemeStore.ts         # 主题 / 布局持久化设置
 │   │   ├── useTemplateStore.ts      # 模板 CRUD 状态
 │   │   ├── useRecentStore.ts        # 最近访问记录（persist）
 │   │   ├── useEditorUIStore.ts      # 光标 / 选区 → 状态栏
+│   │   ├── useI18nStore.ts          # 语言偏好（persist，localStorage）
+│   │   ├── useChatStore.ts          # AI 对话历史（persist，localStorage）
 │   │   └── useNotificationStore.ts
 │   ├── hooks/
 │   │   ├── useKeyboard.ts           # 全局快捷键注册
@@ -572,8 +668,9 @@ gists-client/
 │       ├── Toolbar.tsx              # 顶部工具栏
 │       ├── Sidebar.tsx              # 列表 + 搜索 + 过滤
 │       ├── Editor.tsx               # Monaco + 草稿 + 冲突 + 标签页
+│       ├── Onboarding.tsx           # 四步引导向导
 │       ├── RevisionBrowser.tsx      # 历史版本侧面板
-│       ├── AIPanel.tsx              # AI 对话面板（流式响应）
+│       ├── AIPanel.tsx              # AI 对话面板（流式响应 + 历史持久化）
 │       ├── RunPanel.tsx             # 代码运行输出面板
 │       ├── GraphView.tsx            # 力导向关系图（Canvas）
 │       ├── TemplatesModal.tsx       # 模板管理 + 编辑表单
@@ -589,7 +686,7 @@ gists-client/
 │       ├── MarkdownPreview.tsx      # GFM + Mermaid 渲染
 │       ├── DiffModal.tsx            # Working tree diff
 │       ├── TagInput.tsx             # 标签选择器
-│       ├── SettingsModal.tsx        # 设置（主题/字体/Vim/Zen/AI）
+│       ├── SettingsModal.tsx        # 设置（主题/字体/Vim/Zen/AI/语言）
 │       └── ImportModal.tsx          # 导入预览
 │
 ├── src-tauri/src/
@@ -727,7 +824,7 @@ AI 对话
 | 数据库 | WAL 模式 + Foreign Keys；upsert 使用事务自动回滚 |
 | 并发写入 | `isWriting` ref 互斥锁防止自动保存与冲突解决并发 |
 | 代码执行隔离 | 在独立临时目录执行，30 秒超时强制 kill |
-| HTTP | rustls（无 OpenSSL）+ `User-Agent: gists-client/0.1` |
+| HTTP | rustls（无 OpenSSL）+ `User-Agent: gists-client/0.2` |
 | 速率限制 | 读 `X-RateLimit-Remaining`，耗尽时退避至 Reset（上限 5 分钟） |
 
 ### 数据库位置
