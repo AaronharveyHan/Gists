@@ -1,0 +1,65 @@
+name: Release
+
+# 触发条件：推送 v* 格式的 tag，例如 v0.2.1
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    strategy:
+      fail-fast: false   # 某个平台失败不影响其他平台继续跑
+      matrix:
+        platform:
+          - macos-latest
+          - windows-latest
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      # 1. 拉取代码
+      - uses: actions/checkout@v4
+
+      # 2. 安装 Node.js
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. 安装 Rust stable
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 4. 缓存 Rust 编译产物（加速后续构建）
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # 5. 安装前端依赖
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 6. 编译 + 创建 Release + 上传产物
+      #    tauri-action 会：
+      #    - 运行 npm run build（vite 构建前端）
+      #    - 运行 cargo tauri build（编译 Rust + 打包）
+      #    - 在 GitHub Releases 创建一个 draft release（同名 tag 只创建一次）
+      #    - 把本平台产物上传到该 release
+      - name: Build and upload to GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}          # 例：v0.2.1
+          releaseName: 'Gists Client ${{ github.ref_name }}'
+          releaseBody: |
+            ## 安装说明
+
+            | 平台 | 下载文件 |
+            |------|----------|
+            | macOS | `.dmg` |
+            | Windows | `.msi`（推荐）或 `.exe` |
+            > **macOS 用户**：首次打开时若提示"无法验证开发者"，右键 → 打开 即可。
+            > **Windows 用户**：SmartScreen 警告点"仍要运行"即可。
+          releaseDraft: true      # 先创建草稿，检查产物无误后手动发布
+          prerelease: false
