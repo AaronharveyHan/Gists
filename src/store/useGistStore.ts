@@ -5,8 +5,9 @@
  */
 import { create } from "zustand";
 import * as api from "../api/tauri";
-import type { CategoryCount, Gist, SyncResult, Tag } from "../api/tauri";
+import type { CategoryCount, Collection, CollectionCount, Gist, SyncResult, Tag } from "../api/tauri";
 import { notify } from "./useNotificationStore";
+import { useRecentStore } from "./useRecentStore";
 
 export type SyncStatus = "idle" | "syncing" | "error";
 
@@ -30,6 +31,12 @@ interface GistState {
   /** Filter by auto/user category slug (mutually exclusive with tag filter & search). */
   activeCategoryId: string | null;
   categoryCounts: CategoryCount[];
+
+  // Collection data
+  allCollections: CollectionCount[];
+  activeCollectionId: string | null;
+  /** Cache of per-gist collection memberships: gistId → Collection[]. Populated lazily. */
+  gistCollections: Record<string, Collection[]>;
 
   // Actions
   setAuthenticated: (login: string) => void;
@@ -69,6 +76,31 @@ interface GistState {
 
   setActiveCategory: (category: string | null) => Promise<void>;
   togglePin: (gistId: string) => Promise<void>;
+
+  // Collection actions
+  loadCollections: () => Promise<void>;
+  createCollection: (name: string, description: string, color: string, icon: string) => Promise<Collection>;
+  updateCollection: (id: string, name: string, description: string, color: string, icon: string) => Promise<void>;
+  deleteCollection: (id: string) => Promise<void>;
+  setActiveCollection: (id: string | null) => Promise<void>;
+  loadGistCollections: (gistId: string) => Promise<void>;
+  addGistToCollection: (collectionId: string, gistId: string) => Promise<void>;
+  removeGistFromCollection: (collectionId: string, gistId: string) => Promise<void>;
+
+  // Open gist tabs (editor tab bar)
+  openTabIds: string[];
+  openInTab: (id: string) => void;
+  closeTab: (id: string) => void;
+
+  // Offline-first
+  networkOnline: boolean;
+  setNetworkOnline: (online: boolean) => void;
+  createLocalGist: (
+    description: string,
+    isPublic: boolean,
+    files: [string, string][]
+  ) => Promise<Gist>;
+  publishGist: (localId: string) => Promise<Gist>;
 }
 
 export const useGistStore = create<GistState>((set, get) => ({
@@ -85,6 +117,11 @@ export const useGistStore = create<GistState>((set, get) => ({
   gistTags: {},
   activeCategoryId: null,
   categoryCounts: [],
+  allCollections: [],
+  activeCollectionId: null,
+  gistCollections: {},
+  openTabIds: [],
+  networkOnline: typeof navigator !== "undefined" ? navigator.onLine : true,
 
   setAuthenticated: (login) =>
     set({ isAuthenticated: true, githubLogin: login }),
@@ -101,24 +138,31 @@ export const useGistStore = create<GistState>((set, get) => ({
       gistTags: {},
       activeCategoryId: null,
       categoryCounts: [],
+      allCollections: [],
+      activeCollectionId: null,
+      gistCollections: {},
+      openTabIds: [],
     }),
 
   setSearch: async (q) => {
-    // Switching to search clears tag + category filter
-    set({ searchQuery: q, activeTagId: null, activeCategoryId: null });
+    set({ searchQuery: q, activeTagId: null, activeCategoryId: null, activeCollectionId: null });
     const gists = q ? await api.searchGists(q) : await api.listGists();
     set({ gists });
   },
 
-  selectGist: (id) => set({ selectedId: id }),
+  selectGist: (id) => {
+    if (id) useRecentStore.getState().push(id);
+    set({ selectedId: id });
+  },
 
   loadGists: async () => {
-    const [gists, allTags, categoryCounts] = await Promise.all([
+    const [gists, allTags, categoryCounts, allCollections] = await Promise.all([
       api.listGists(),
       api.listTags(),
       api.listCategoryCounts(),
+      api.listCollectionCounts(),
     ]);
-    set({ gists, selectedId: gists[0]?.id ?? null, allTags, categoryCounts });
+    set({ gists, selectedId: gists[0]?.id ?? null, allTags, categoryCounts, allCollections });
   },
 
   sync: async (force = false) => {
@@ -128,10 +172,15 @@ export const useGistStore = create<GistState>((set, get) => ({
     set({ syncStatus: "syncing", syncError: null });
     try {
       const result = await api.syncGists(fullSync);
-      const { searchQuery, activeTagId, activeCategoryId } = get();
+      const { searchQuery, activeTagId, activeCategoryId, activeCollectionId } = get();
       let gists: Gist[];
-      const categoryCounts = await api.listCategoryCounts();
-      if (activeCategoryId !== null) {
+      const [categoryCounts, allCollections] = await Promise.all([
+        api.listCategoryCounts(),
+        api.listCollectionCounts(),
+      ]);
+      if (activeCollectionId !== null) {
+        gists = await api.listCollectionGists(activeCollectionId);
+      } else if (activeCategoryId !== null) {
         gists = await api.listGistsByCategory(activeCategoryId);
       } else if (activeTagId !== null) {
         gists = await api.listGistsByTag(activeTagId);
@@ -140,7 +189,7 @@ export const useGistStore = create<GistState>((set, get) => ({
       } else {
         gists = await api.listGists();
       }
-      set({ gists, syncStatus: "idle", lastSyncResult: result, categoryCounts });
+      set({ gists, syncStatus: "idle", lastSyncResult: result, categoryCounts, allCollections });
     } catch (e) {
       set({ syncStatus: "error", syncError: String(e) });
       notify("同步失败: " + String(e));
@@ -149,6 +198,7 @@ export const useGistStore = create<GistState>((set, get) => ({
 
   createGist: async (description, isPublic, files) => {
     const gist = await api.createGist(description, isPublic, files);
+    useRecentStore.getState().push(gist.id);
     set((s) => ({
       gists: [gist, ...s.gists],
       selectedId: gist.id,
@@ -182,6 +232,7 @@ export const useGistStore = create<GistState>((set, get) => ({
 
   deleteGist: async (id) => {
     await api.deleteGist(id);
+    useRecentStore.getState().remove(id);
     set((s) => {
       const gists = s.gists.filter((g) => g.id !== id);
       // Also drop cached tags for the deleted gist
@@ -239,8 +290,7 @@ export const useGistStore = create<GistState>((set, get) => ({
   },
 
   setActiveTag: async (id) => {
-    // Switching to tag filter clears search + category
-    set({ activeTagId: id, searchQuery: "", activeCategoryId: null });
+    set({ activeTagId: id, searchQuery: "", activeCategoryId: null, activeCollectionId: null });
     const gists =
       id !== null ? await api.listGistsByTag(id) : await api.listGists();
     set({ gists });
@@ -283,6 +333,7 @@ export const useGistStore = create<GistState>((set, get) => ({
       activeCategoryId: category,
       searchQuery: "",
       activeTagId: null,
+      activeCollectionId: null,
       categoryCounts,
     });
     const gists = await api.listGistsByCategory(category);
@@ -304,6 +355,134 @@ export const useGistStore = create<GistState>((set, get) => ({
       });
       return { gists: updated };
     });
+  },
+
+  // ── Offline-first ────────────────────────────────────────────────────────────
+
+  setNetworkOnline: (online) => set({ networkOnline: online }),
+
+  createLocalGist: async (description, isPublic, files) => {
+    const gist = await api.createLocalGist(description, isPublic, files);
+    useRecentStore.getState().push(gist.id);
+    set((s) => ({ gists: [gist, ...s.gists], selectedId: gist.id }));
+    return gist;
+  },
+
+  publishGist: async (localId) => {
+    const published = await api.publishLocalGist(localId);
+    useRecentStore.getState().push(published.id);
+    set((s) => ({
+      gists: s.gists.map((g) => (g.id === localId ? published : g)),
+      selectedId: s.selectedId === localId ? published.id : s.selectedId,
+    }));
+    return published;
+  },
+
+  // ── Collection actions ────────────────────────────────────────────────────
+
+  loadCollections: async () => {
+    const allCollections = await api.listCollectionCounts();
+    set({ allCollections });
+  },
+
+  createCollection: async (name, description, color, icon) => {
+    const col = await api.createCollection(name, description, color, icon);
+    const allCollections = await api.listCollectionCounts();
+    set({ allCollections });
+    return col;
+  },
+
+  updateCollection: async (id, name, description, color, icon) => {
+    await api.updateCollection(id, name, description, color, icon);
+    const allCollections = await api.listCollectionCounts();
+    set({ allCollections });
+  },
+
+  deleteCollection: async (id) => {
+    await api.deleteCollection(id);
+    set((s) => {
+      const allCollections = s.allCollections.filter((c) => c.id !== id);
+      // Drop per-gist cache entries for this collection
+      const gistCollections: Record<string, Collection[]> = {};
+      for (const [gistId, cols] of Object.entries(s.gistCollections)) {
+        gistCollections[gistId] = cols.filter((c) => c.id !== id);
+      }
+      return {
+        allCollections,
+        gistCollections,
+        activeCollectionId: s.activeCollectionId === id ? null : s.activeCollectionId,
+      };
+    });
+    if (get().activeCollectionId === null && get().activeCategoryId === null && get().activeTagId === null) {
+      const gists = await api.listGists();
+      set({ gists });
+    }
+  },
+
+  setActiveCollection: async (id) => {
+    set({ activeCollectionId: id, searchQuery: "", activeTagId: null, activeCategoryId: null });
+    const gists = id !== null ? await api.listCollectionGists(id) : await api.listGists();
+    set({ gists });
+  },
+
+  loadGistCollections: async (gistId) => {
+    try {
+      const cols = await api.getGistCollections(gistId);
+      set((s) => ({ gistCollections: { ...s.gistCollections, [gistId]: cols } }));
+    } catch {
+      set((s) => ({ gistCollections: { ...s.gistCollections, [gistId]: [] } }));
+    }
+  },
+
+  addGistToCollection: async (collectionId, gistId) => {
+    await api.addGistToCollection(collectionId, gistId);
+    // Refresh gist collections cache + counts
+    const [cols, allCollections] = await Promise.all([
+      api.getGistCollections(gistId),
+      api.listCollectionCounts(),
+    ]);
+    set((s) => ({
+      allCollections,
+      gistCollections: { ...s.gistCollections, [gistId]: cols },
+    }));
+    // If currently viewing this collection, refresh the list
+    if (get().activeCollectionId === collectionId) {
+      const gists = await api.listCollectionGists(collectionId);
+      set({ gists });
+    }
+  },
+
+  removeGistFromCollection: async (collectionId, gistId) => {
+    await api.removeGistFromCollection(collectionId, gistId);
+    const [cols, allCollections] = await Promise.all([
+      api.getGistCollections(gistId),
+      api.listCollectionCounts(),
+    ]);
+    set((s) => ({
+      allCollections,
+      gistCollections: { ...s.gistCollections, [gistId]: cols },
+    }));
+    if (get().activeCollectionId === collectionId) {
+      const gists = await api.listCollectionGists(collectionId);
+      set({ gists });
+    }
+  },
+
+  openInTab: (id) => {
+    const { openTabIds, selectGist } = get();
+    if (!openTabIds.includes(id)) set({ openTabIds: [...openTabIds, id] });
+    selectGist(id);
+  },
+
+  closeTab: (id) => {
+    const { openTabIds, selectedId, selectGist } = get();
+    const next = openTabIds.filter((t) => t !== id);
+    set({ openTabIds: next });
+    if (selectedId === id) {
+      const idx = openTabIds.indexOf(id);
+      const fallback = next[idx] ?? next[idx - 1] ?? null;
+      selectGist(fallback);
+    }
   },
 }));
 

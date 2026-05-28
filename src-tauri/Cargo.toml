@@ -1,6 +1,6 @@
 [package]
 name = "gists-client"
-version = "0.1.0"
+version = "0.2.0"
 description = "A lightweight GitHub Gist desktop client"
 authors = []
 license = ""
@@ -12,11 +12,24 @@ rust-version = "1.70"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = ["shell-open", "dialog-open", "dialog-save"] }
+tauri = { version = "1.5", features = [
+  "shell-open",
+  "dialog-open",
+  "dialog-save",
+  "dialog-confirm",
+  "global-shortcut-all",
+  "system-tray",
+  "clipboard-write-text",
+  "window-hide",
+  "window-show",
+  "window-set-focus",
+  "window-center",
+  "window-start-dragging",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.11", features = ["json", "rustls-tls", "stream"], default-features = false }
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"

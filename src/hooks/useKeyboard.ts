@@ -4,11 +4,11 @@ type Handler = (e: KeyboardEvent) => void;
 
 /**
  * Register a global keyboard shortcut.
- * key: e.g. "k", modifier: "meta" | "ctrl" | "shift" | "meta+shift" | null
+ * key: e.g. "k", modifier: "meta" | "ctrl" | "shift" | "meta+shift" | "alt" | null
  */
 export function useKeyboard(
   key: string,
-  modifier: "meta" | "ctrl" | "shift" | "meta+shift" | null,
+  modifier: "meta" | "ctrl" | "shift" | "meta+shift" | "alt" | null,
   handler: Handler
 ): void {
   useEffect(() => {
@@ -16,16 +16,19 @@ export function useKeyboard(
       let modMatch: boolean;
       switch (modifier) {
         case "meta":
-          modMatch = (e.metaKey || e.ctrlKey) && !e.shiftKey;
+          modMatch = (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey;
           break;
         case "ctrl":
-          modMatch = e.ctrlKey && !e.shiftKey;
+          modMatch = e.ctrlKey && !e.shiftKey && !e.altKey;
           break;
         case "shift":
-          modMatch = e.shiftKey && !e.metaKey && !e.ctrlKey;
+          modMatch = e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey;
           break;
         case "meta+shift":
-          modMatch = (e.metaKey || e.ctrlKey) && e.shiftKey;
+          modMatch = (e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey;
+          break;
+        case "alt":
+          modMatch = e.altKey && !e.metaKey && !e.ctrlKey;
           break;
         default:
           modMatch = true;

@@ -4,9 +4,15 @@ use std::collections::HashMap;
 use tauri::State;
 use tokio::sync::Mutex;
 
+pub use crate::ai::AiMessage;
+
+const AI_DEFAULT_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+const AI_DEFAULT_MODEL: &str = "qwen-turbo";
+const AI_DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-v3";
+
 use chrono::Utc;
 
-use gists_client::{cache, db, github, models::*};
+use gists_client::{cache, db, github, models::*, templates};
 use gists_client::github::FetchGistOutcome;
 
 // ── Keychain helpers ──────────────────────────────────────────────────────────
@@ -273,8 +279,11 @@ pub async fn delete_gist(
     gist_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let token = state.token.lock().await.clone().ok_or("Not authenticated")?;
-    github::delete_gist(&token, &gist_id).await.map_err(|e| e.to_string())?;
+    let is_local = cache::is_local_only(&gist_id).map_err(|e| e.to_string())?;
+    if !is_local {
+        let token = state.token.lock().await.clone().ok_or("Not authenticated")?;
+        github::delete_gist(&token, &gist_id).await.map_err(|e| e.to_string())?;
+    }
     cache::delete_gist_cache(&gist_id).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -319,6 +328,11 @@ pub fn list_gists_by_category(category: String) -> Result<Vec<Gist>, String> {
 #[tauri::command]
 pub fn list_category_counts() -> Result<Vec<CategoryCount>, String> {
     cache::list_category_counts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_tag_counts() -> Result<Vec<cache::TagCount>, String> {
+    cache::list_tag_counts().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -429,6 +443,21 @@ pub async fn fetch_rev_diff(
     }
 
     Ok(parts.join("\n"))
+}
+
+/// Fetch the full gist snapshot at a specific revision SHA from GitHub.
+/// Returns the complete Gist (including file contents at that commit) so the
+/// frontend can restore the editor to that state.
+#[tauri::command]
+pub async fn fetch_gist_at_rev(
+    gist_id: String,
+    sha: String,
+    state: State<'_, AppState>,
+) -> Result<Gist, String> {
+    let token = state.token.lock().await.clone().ok_or("Not authenticated")?;
+    github::fetch_gist_at_sha(&token, &gist_id, &sha)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Export / Import ──────────────────────────────────────────────────────────
@@ -643,4 +672,430 @@ pub async fn import_execute(
     }
 
     Ok(imported)
+}
+
+// ── AI integration ────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+pub struct AiConfig {
+    pub base_url: String,
+    pub model: String,
+    pub has_key: bool,
+    pub embedding_model: String,
+    /// Separate base URL for embedding API; empty string means "same as base_url".
+    pub embedding_base_url: String,
+}
+
+#[tauri::command]
+pub fn get_ai_config() -> Result<AiConfig, String> {
+    Ok(AiConfig {
+        base_url: db::get_setting("ai_base_url")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| AI_DEFAULT_BASE_URL.to_string()),
+        model: db::get_setting("ai_model")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| AI_DEFAULT_MODEL.to_string()),
+        has_key: db::get_setting("ai_api_key")
+            .ok()
+            .flatten()
+            .map(|k| !k.is_empty())
+            .unwrap_or(false),
+        embedding_model: db::get_setting("ai_embedding_model")
+            .map_err(|e| e.to_string())?
+            .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string()),
+        embedding_base_url: db::get_setting("ai_embedding_base_url")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+pub fn save_ai_config(
+    base_url: String,
+    api_key: String,
+    model: String,
+    embedding_model: String,
+    embedding_base_url: String,
+) -> Result<(), String> {
+    db::set_setting("ai_base_url", &base_url).map_err(|e: anyhow::Error| e.to_string())?;
+    db::set_setting("ai_model", &model).map_err(|e: anyhow::Error| e.to_string())?;
+    db::set_setting("ai_embedding_model", &embedding_model)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    db::set_setting("ai_embedding_base_url", &embedding_base_url)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    if !api_key.is_empty() {
+        db::set_setting("ai_api_key", &api_key).map_err(|e: anyhow::Error| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ai_chat(
+    window: tauri::Window,
+    stream_id: String,
+    messages: Vec<AiMessage>,
+) -> Result<(), String> {
+    let base_url = db::get_setting("ai_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_BASE_URL.to_string());
+    let api_key = db::get_setting("ai_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = db::get_setting("ai_model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_MODEL.to_string());
+
+    if api_key.is_empty() {
+        return Err(
+            "AI API key not configured. Open Settings → AI tab to add your key.".to_string(),
+        );
+    }
+
+    crate::ai::stream_chat(&window, &stream_id, &base_url, &api_key, &model, &messages)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+// ── Semantic search / embedding indexer ──────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+pub struct EmbeddingProgress {
+    pub indexed: usize,
+    pub total: usize,
+    pub running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// Current embedding index status (indexed / total, not running).
+#[tauri::command]
+pub fn get_embedding_status() -> Result<EmbeddingProgress, String> {
+    let model = db::get_setting("ai_embedding_model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+    let (indexed, total) = cache::embedding_counts(&model).map_err(|e| e.to_string())?;
+    Ok(EmbeddingProgress { indexed, total, running: false, error: None })
+}
+
+/// Returns the effective base URL for embedding calls.
+/// Uses `ai_embedding_base_url` if set, otherwise falls back to `ai_base_url`.
+/// Strips any trailing "/embeddings" suffix so callers can safely append it.
+fn effective_embedding_base_url() -> String {
+    let raw = {
+        let explicit = db::get_setting("ai_embedding_base_url")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if !explicit.trim().is_empty() {
+            explicit
+        } else {
+            db::get_setting("ai_base_url")
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| AI_DEFAULT_BASE_URL.to_string())
+        }
+    };
+    // Guard against users who stored the full endpoint path (e.g. ".../v1/embeddings")
+    let trimmed = raw.trim_end_matches('/');
+    if trimmed.ends_with("/embeddings") {
+        trimmed[..trimmed.len() - "/embeddings".len()].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Generate a query embedding then return top-N results by cosine similarity.
+#[tauri::command]
+pub async fn semantic_search(
+    query: String,
+    limit: usize,
+) -> Result<Vec<cache::SemanticResult>, String> {
+    let base_url = effective_embedding_base_url();
+    let api_key = db::get_setting("ai_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = db::get_setting("ai_embedding_model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+
+    if api_key.is_empty() {
+        return Err(
+            "AI API key not configured. Open Settings → AI tab.".into(),
+        );
+    }
+
+    let embedding =
+        gists_client::embedding::generate_embedding(&query, &base_url, &api_key, &model)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    cache::semantic_search_by_embedding(&embedding, &model, limit)
+        .map_err(|e| e.to_string())
+}
+
+/// Spawn a background task that generates and stores embeddings for all
+/// stale gists. Emits `embedding-progress` events to the window.
+/// No-op if AI key is not configured.
+#[tauri::command]
+pub async fn start_embedding_indexer(window: tauri::Window) -> Result<(), String> {
+    let base_url = effective_embedding_base_url();
+    let api_key = db::get_setting("ai_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = db::get_setting("ai_embedding_model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+
+    if api_key.is_empty() {
+        return Ok(());
+    }
+
+    tauri::async_runtime::spawn(async move {
+        run_indexer(window, base_url, api_key, model).await;
+    });
+    Ok(())
+}
+
+async fn run_indexer(
+    window: tauri::Window,
+    base_url: String,
+    api_key: String,
+    model: String,
+) {
+    let stale = match cache::get_stale_gist_ids(&model) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let total_stale = stale.len();
+    if total_stale == 0 {
+        return;
+    }
+
+    let _ = window.emit(
+        "embedding-progress",
+        EmbeddingProgress { indexed: 0, total: total_stale, running: true, error: None },
+    );
+
+    let mut done = 0usize;
+    let mut stop_error: Option<String> = None;
+    for (gist_id, version_key) in stale {
+        let text = match cache::build_embed_text_for_gist(&gist_id) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        match gists_client::embedding::generate_embedding(&text, &base_url, &api_key, &model)
+            .await
+        {
+            Ok(emb) => {
+                let _ = cache::store_embedding(&gist_id, &version_key, &model, &emb);
+                done += 1;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                eprintln!("[embedding indexer] stopped: {msg}");
+                stop_error = Some(msg);
+                break;
+            }
+        }
+        let _ = window.emit(
+            "embedding-progress",
+            EmbeddingProgress { indexed: done, total: total_stale, running: true, error: None },
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
+    }
+
+    let (indexed, total) = cache::embedding_counts(&model).unwrap_or((done, done));
+    let _ = window.emit(
+        "embedding-progress",
+        EmbeddingProgress { indexed, total, running: false, error: stop_error },
+    );
+}
+
+// ── Local draft / offline-first ──────────────────────────────────────────────
+
+#[tauri::command]
+pub fn create_local_gist(
+    description: String,
+    public: bool,
+    files: Vec<(String, String)>,
+) -> Result<Gist, String> {
+    cache::create_local_draft(&description, public, &files).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn publish_local_gist(
+    local_id: String,
+    state: State<'_, AppState>,
+) -> Result<Gist, String> {
+    let gist = cache::get_gist(&local_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Local gist not found".to_string())?;
+
+    let token = state.token.lock().await.clone().ok_or("Not authenticated")?;
+    let files: Vec<(String, String)> = gist
+        .files
+        .iter()
+        .map(|f| (f.filename.clone(), f.content.clone()))
+        .collect();
+
+    let (new_gist, _etag) = github::create_gist(&token, &gist.description, gist.public, files)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    cache::promote_local_to_remote(&local_id, &new_gist).map_err(|e| e.to_string())?;
+
+    cache::get_gist(&new_gist.id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Gist not found after publish".to_string())
+}
+
+// ── Templates ─────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_templates() -> Result<Vec<templates::Template>, String> {
+    templates::list_templates().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_template(
+    name: String,
+    description: String,
+    is_public: bool,
+    files: Vec<(String, String)>,
+) -> Result<templates::Template, String> {
+    templates::create_template(&name, &description, is_public, &files)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_template(
+    id: i32,
+    name: String,
+    description: String,
+    is_public: bool,
+    files: Vec<(String, String)>,
+) -> Result<templates::Template, String> {
+    templates::update_template(id, &name, &description, is_public, &files)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_template(id: i32) -> Result<(), String> {
+    templates::delete_template(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_gist_as_template(gist_id: String, name: String) -> Result<templates::Template, String> {
+    templates::save_gist_as_template(&gist_id, &name).map_err(|e| e.to_string())
+}
+
+// ── Code runner ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn run_code(
+    run_id: String,
+    filename: String,
+    content: String,
+    window: tauri::Window,
+) -> Result<(), String> {
+    // Spawn as a background task so the command returns immediately
+    // and the frontend receives output via events.
+    tokio::spawn(async move {
+        if let Err(e) = gists_client::runner::run_code(window.clone(), run_id.clone(), filename, content).await {
+            let _ = window.emit(
+                &format!("run-line-{}", run_id),
+                gists_client::runner::RunLine { text: e.to_string(), stream: "stderr".into() },
+            );
+            let _ = window.emit(
+                &format!("run-done-{}", run_id),
+                gists_client::runner::RunDone { exit_code: -1, timed_out: false, killed: false },
+            );
+        }
+    });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn kill_run(run_id: String) -> Result<(), String> {
+    gists_client::runner::kill_run(&run_id);
+    Ok(())
+}
+
+// ── Relation graph ────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_gist_tag_pairs() -> Result<Vec<(String, i32)>, String> {
+    cache::list_gist_tag_pairs().map_err(|e| e.to_string())
+}
+
+// ── Collections ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_collections() -> Result<Vec<Collection>, String> {
+    cache::list_collections().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_collection_counts() -> Result<Vec<CollectionCount>, String> {
+    cache::list_collection_counts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn create_collection(
+    name: String,
+    description: String,
+    color: String,
+    icon: String,
+) -> Result<Collection, String> {
+    cache::create_collection(&name, &description, &color, &icon)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_collection(
+    id: String,
+    name: String,
+    description: String,
+    color: String,
+    icon: String,
+) -> Result<Collection, String> {
+    cache::update_collection(&id, &name, &description, &color, &icon)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_collection(id: String) -> Result<(), String> {
+    cache::delete_collection(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn add_gist_to_collection(collection_id: String, gist_id: String) -> Result<(), String> {
+    cache::add_gist_to_collection(&collection_id, &gist_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn remove_gist_from_collection(collection_id: String, gist_id: String) -> Result<(), String> {
+    cache::remove_gist_from_collection(&collection_id, &gist_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_collection_gists(collection_id: String) -> Result<Vec<Gist>, String> {
+    cache::list_collection_gists(&collection_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_gist_collections(gist_id: String) -> Result<Vec<Collection>, String> {
+    cache::get_gist_collections(&gist_id).map_err(|e| e.to_string())
 }

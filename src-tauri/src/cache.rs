@@ -12,12 +12,12 @@ use crate::models::{CategoryCount, Gist, GistFile, Tag};
 /// SELECT list aligned with `row_to_gist` column order (no table prefix).
 const GIST_ROW: &str = "id, description, public, html_url, created_at, updated_at, \
     COALESCE(pending_push,0), COALESCE(category,'gist'), COALESCE(lang_group,'other'), \
-    COALESCE(pinned,0)";
+    COALESCE(pinned,0), COALESCE(local_only,0)";
 
 /// Same columns with `g.` prefix (search / joins).
 const GIST_ROW_G: &str = "g.id, g.description, g.public, g.html_url, g.created_at, g.updated_at, \
     COALESCE(g.pending_push,0), COALESCE(g.category,'gist'), COALESCE(g.lang_group,'other'), \
-    COALESCE(g.pinned,0)";
+    COALESCE(g.pinned,0), COALESCE(g.local_only,0)";
 
 fn classify_and_persist(conn: &Connection, gist: &Gist) -> Result<()> {
     let user_set: i32 = match conn.query_row(
@@ -272,6 +272,7 @@ pub fn save_gist_draft(
             updated_at,
             files: files.clone(),
             pending_push: true,
+            local_only: false,
             category: "gist".into(),
             lang_group: "other".into(),
             pinned: false,
@@ -285,6 +286,126 @@ pub fn save_gist_draft(
         g.category = cat;
         g.lang_group = lg;
         Ok(g)
+    })
+}
+
+fn new_local_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    format!("local-{:x}{:05x}", d.as_secs(), d.subsec_micros())
+}
+
+/// Create a gist that lives only in local SQLite (never sent to GitHub).
+pub fn create_local_draft(
+    description: &str,
+    public: bool,
+    files: &[(String, String)],
+) -> Result<Gist> {
+    use crate::db::with_db;
+    with_db(|conn| {
+        let id = new_local_id();
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+        conn.execute(
+            "INSERT INTO gists(id, description, public, html_url, created_at, updated_at, \
+             synced_at, pending_push, local_only) \
+             VALUES(?1,?2,?3,'',?4,?4,?4,1,1)",
+            params![id, description, public as i32, now],
+        )?;
+
+        for (filename, content) in files {
+            conn.execute(
+                "INSERT OR REPLACE INTO files(gist_id, filename, content, size) \
+                 VALUES(?1,?2,?3,?4)",
+                params![id, filename, content, content.len() as i64],
+            )?;
+        }
+
+        // FTS index
+        let fnames = files.iter().map(|(f, _)| f.as_str()).collect::<Vec<_>>().join(" ");
+        let fc = files.iter().map(|(_, c)| c.as_str()).collect::<Vec<_>>().join("\n");
+        let _ = conn.execute(
+            "INSERT INTO gists_fts(gist_id, description, filenames, content_text) \
+             VALUES(?1,?2,?3,?4)",
+            params![id, description, fnames, fc],
+        );
+
+        let gist_files: Vec<GistFile> = files
+            .iter()
+            .map(|(filename, content)| GistFile {
+                filename: filename.clone(),
+                language: None,
+                content: content.clone(),
+                size: content.len() as i64,
+                raw_url: None,
+            })
+            .collect();
+
+        let mut g = Gist {
+            id: id.clone(),
+            description: description.to_string(),
+            public,
+            html_url: String::new(),
+            created_at: now.clone(),
+            updated_at: now,
+            files: gist_files,
+            pending_push: true,
+            local_only: true,
+            category: "gist".into(),
+            lang_group: "other".into(),
+            pinned: false,
+        };
+        classify_and_persist(conn, &g)?;
+        if let Ok((cat, lg)) = conn.query_row(
+            "SELECT COALESCE(category,'gist'), COALESCE(lang_group,'other') FROM gists WHERE id=?1",
+            params![id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            g.category = cat;
+            g.lang_group = lg;
+        }
+        Ok(g)
+    })
+}
+
+/// Atomically promote a local draft to a real GitHub gist.
+/// Updates the local placeholder ID to the GitHub-assigned ID in all tables.
+pub fn promote_local_to_remote(local_id: &str, new_gist: &Gist) -> Result<()> {
+    use crate::db::with_db_mut;
+    with_db_mut(|conn| {
+        let tx = conn.transaction()?;
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+
+        // Copy gist row with GitHub ID, cleared local_only + pending_push flags.
+        tx.execute(
+            "INSERT INTO gists(id, description, public, html_url, created_at, updated_at, \
+             synced_at, pending_push, local_only, pinned, category, lang_group) \
+             SELECT ?1, description, public, ?2, created_at, ?3, ?4, 0, 0, \
+             pinned, category, lang_group \
+             FROM gists WHERE id = ?5",
+            params![new_gist.id, new_gist.html_url, new_gist.updated_at, now, local_id],
+        )?;
+
+        // Migrate all FK references.
+        tx.execute("UPDATE files SET gist_id=?1 WHERE gist_id=?2", params![new_gist.id, local_id])?;
+        tx.execute("UPDATE gist_tags SET gist_id=?1 WHERE gist_id=?2", params![new_gist.id, local_id])?;
+        tx.execute("UPDATE files_remote_snapshot SET gist_id=?1 WHERE gist_id=?2", params![new_gist.id, local_id])?;
+        tx.execute("DELETE FROM gists_fts WHERE gist_id=?1", params![local_id])?;
+        tx.execute("DELETE FROM gists WHERE id=?1", params![local_id])?;
+
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+pub fn is_local_only(gist_id: &str) -> Result<bool> {
+    with_db(|conn| {
+        let v: i32 = conn.query_row(
+            "SELECT COALESCE(local_only,0) FROM gists WHERE id=?1",
+            params![gist_id],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        Ok(v != 0)
     })
 }
 
@@ -369,10 +490,22 @@ fn row_to_gist(
         category: row.get(7)?,
         lang_group: row.get(8)?,
         pinned: row.get::<_, i32>(9)? != 0,
+        local_only: row.get::<_, i32>(10)? != 0,
     })
 }
 
 /// List all cached gists ordered by most recently updated.
+/// Return all (gist_id, tag_id) pairs — used to build the relation graph.
+pub fn list_gist_tag_pairs() -> Result<Vec<(String, i32)>> {
+    with_db(|conn| {
+        let pairs: Vec<(String, i32)> = conn
+            .prepare("SELECT gist_id, tag_id FROM gist_tags")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(pairs)
+    })
+}
+
 pub fn list_gists() -> Result<Vec<Gist>> {
     with_db(|conn| {
         let mut stmt = conn.prepare(&format!(
@@ -617,6 +750,38 @@ pub fn list_gists_by_category(category: &str) -> Result<Vec<Gist>> {
     })
 }
 
+/// Tag usage counts for the stats panel.
+#[derive(serde::Serialize, Clone)]
+pub struct TagCount {
+    pub id: i64,
+    pub name: String,
+    pub color: String,
+    pub count: i64,
+}
+
+pub fn list_tag_counts() -> Result<Vec<TagCount>> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT t.id, t.name, t.color, COUNT(gt.gist_id) AS cnt \
+             FROM tags t \
+             LEFT JOIN gist_tags gt ON t.id = gt.tag_id \
+             GROUP BY t.id \
+             ORDER BY cnt DESC, t.name ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(TagCount {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    color: row.get(2)?,
+                    count: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
 /// Per-category gist counts for the sidebar.
 pub fn list_category_counts() -> Result<Vec<CategoryCount>> {
     with_db(|conn| {
@@ -680,5 +845,306 @@ pub fn toggle_pin(gist_id: &str) -> Result<bool> {
             |row| row.get(0),
         )?;
         Ok(pinned != 0)
+    })
+}
+
+// ── Semantic search / embeddings ──────────────────────────────────────────────
+
+use crate::embedding::{bytes_to_vec, cosine_similarity, vec_to_bytes};
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SemanticResult {
+    pub gist_id: String,
+    pub score: f32,
+}
+
+/// Upsert an embedding for a gist.
+pub fn store_embedding(
+    gist_id: &str,
+    version_key: &str,
+    model: &str,
+    embedding: &[f32],
+) -> Result<()> {
+    let bytes = vec_to_bytes(embedding);
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO gist_embeddings(gist_id, version_key, model, embedding)
+             VALUES(?1,?2,?3,?4)
+             ON CONFLICT(gist_id) DO UPDATE SET
+                 version_key=excluded.version_key,
+                 model=excluded.model,
+                 embedding=excluded.embedding",
+            params![gist_id, version_key, model, bytes],
+        )?;
+        Ok(())
+    })
+}
+
+/// Gists whose stored embedding is missing or stale for the given model.
+/// Returns (gist_id, updated_at) pairs ordered newest-first.
+pub fn get_stale_gist_ids(model: &str) -> Result<Vec<(String, String)>> {
+    with_db(|conn| {
+        conn.prepare(
+            "SELECT g.id, g.updated_at
+             FROM gists g
+             LEFT JOIN gist_embeddings e
+               ON e.gist_id = g.id AND e.model = ?1
+             WHERE e.gist_id IS NULL OR e.version_key != g.updated_at
+             ORDER BY g.updated_at DESC",
+        )?
+        .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    })
+}
+
+/// Fetch description + file content for a gist and build the embed text.
+pub fn build_embed_text_for_gist(gist_id: &str) -> Result<String> {
+    with_db(|conn| {
+        let description: String = conn.query_row(
+            "SELECT COALESCE(description,'') FROM gists WHERE id=?1",
+            params![gist_id],
+            |r| r.get(0),
+        )?;
+        let files: Vec<(String, String)> = conn
+            .prepare(
+                "SELECT filename, COALESCE(content,'')
+                 FROM files WHERE gist_id=?1 ORDER BY filename",
+            )?
+            .query_map(params![gist_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(crate::embedding::build_embed_text(&description, &files))
+    })
+}
+
+/// Return (indexed_count, total_gist_count) for the given model.
+pub fn embedding_counts(model: &str) -> Result<(usize, usize)> {
+    with_db(|conn| {
+        let total: usize =
+            conn.query_row("SELECT COUNT(*) FROM gists", [], |r| r.get(0))?;
+        let indexed: usize = conn.query_row(
+            "SELECT COUNT(*) FROM gist_embeddings WHERE model=?1",
+            params![model],
+            |r| r.get(0),
+        )?;
+        Ok((indexed, total))
+    })
+}
+
+/// Cosine similarity search. Returns top-N gist IDs with score > 0.10.
+pub fn semantic_search_by_embedding(
+    query: &[f32],
+    model: &str,
+    limit: usize,
+) -> Result<Vec<SemanticResult>> {
+    let rows: Vec<(String, Vec<u8>)> = with_db(|conn| {
+        conn.prepare("SELECT gist_id, embedding FROM gist_embeddings WHERE model=?1")?
+            .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    })?;
+
+    let mut scored: Vec<SemanticResult> = rows
+        .into_iter()
+        .map(|(id, bytes)| {
+            let score = cosine_similarity(query, &bytes_to_vec(&bytes));
+            SemanticResult { gist_id: id, score }
+        })
+        .collect();
+
+    scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+
+    Ok(scored
+        .into_iter()
+        .take(limit)
+        .filter(|r| r.score > 0.10)
+        .collect())
+}
+
+// ── Collections ───────────────────────────────────────────────────────────────
+
+use crate::models::{Collection, CollectionCount};
+
+/// Generate a unique collection ID from the current nanosecond timestamp.
+fn gen_collection_id() -> String {
+    let nanos = chrono::Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() * 1_000_000);
+    format!("col-{nanos:x}")
+}
+
+pub fn list_collections() -> Result<Vec<Collection>> {
+    with_db(|conn| {
+        conn.prepare(
+            "SELECT id, name, description, color, icon, created_at, updated_at
+             FROM collections ORDER BY name COLLATE NOCASE ASC",
+        )?
+        .query_map([], |r| {
+            Ok(Collection {
+                id:          r.get(0)?,
+                name:        r.get(1)?,
+                description: r.get(2)?,
+                color:       r.get(3)?,
+                icon:        r.get(4)?,
+                created_at:  r.get(5)?,
+                updated_at:  r.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    })
+}
+
+pub fn list_collection_counts() -> Result<Vec<CollectionCount>> {
+    with_db(|conn| {
+        conn.prepare(
+            "SELECT c.id, c.name, c.color, c.icon, COUNT(cg.gist_id) as cnt
+             FROM collections c
+             LEFT JOIN collection_gists cg ON cg.collection_id = c.id
+             GROUP BY c.id ORDER BY c.name COLLATE NOCASE ASC",
+        )?
+        .query_map([], |r| {
+            Ok(CollectionCount {
+                id:    r.get(0)?,
+                name:  r.get(1)?,
+                color: r.get(2)?,
+                icon:  r.get(3)?,
+                count: r.get(4)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+    })
+}
+
+pub fn create_collection(
+    name: &str,
+    description: &str,
+    color: &str,
+    icon: &str,
+) -> Result<Collection> {
+    let id = gen_collection_id();
+    with_db(|conn| {
+        conn.execute(
+            "INSERT INTO collections(id, name, description, color, icon)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            params![id, name, description, color, icon],
+        )?;
+        let c = conn.query_row(
+            "SELECT id, name, description, color, icon, created_at, updated_at
+             FROM collections WHERE id = ?1",
+            params![id],
+            |r| Ok(Collection {
+                id:          r.get(0)?,
+                name:        r.get(1)?,
+                description: r.get(2)?,
+                color:       r.get(3)?,
+                icon:        r.get(4)?,
+                created_at:  r.get(5)?,
+                updated_at:  r.get(6)?,
+            }),
+        )?;
+        Ok(c)
+    })
+}
+
+pub fn update_collection(
+    id: &str,
+    name: &str,
+    description: &str,
+    color: &str,
+    icon: &str,
+) -> Result<Collection> {
+    with_db(|conn| {
+        conn.execute(
+            "UPDATE collections SET name=?2, description=?3, color=?4, icon=?5,
+             updated_at=datetime('now') WHERE id=?1",
+            params![id, name, description, color, icon],
+        )?;
+        let c = conn.query_row(
+            "SELECT id, name, description, color, icon, created_at, updated_at
+             FROM collections WHERE id = ?1",
+            params![id],
+            |r| Ok(Collection {
+                id:          r.get(0)?,
+                name:        r.get(1)?,
+                description: r.get(2)?,
+                color:       r.get(3)?,
+                icon:        r.get(4)?,
+                created_at:  r.get(5)?,
+                updated_at:  r.get(6)?,
+            }),
+        )?;
+        Ok(c)
+    })
+}
+
+pub fn delete_collection(id: &str) -> Result<()> {
+    with_db(|conn| {
+        conn.execute("DELETE FROM collections WHERE id=?1", params![id])?;
+        Ok(())
+    })
+}
+
+pub fn add_gist_to_collection(collection_id: &str, gist_id: &str) -> Result<()> {
+    with_db(|conn| {
+        conn.execute(
+            "INSERT OR IGNORE INTO collection_gists(collection_id, gist_id) VALUES(?1,?2)",
+            params![collection_id, gist_id],
+        )?;
+        Ok(())
+    })
+}
+
+pub fn remove_gist_from_collection(collection_id: &str, gist_id: &str) -> Result<()> {
+    with_db(|conn| {
+        conn.execute(
+            "DELETE FROM collection_gists WHERE collection_id=?1 AND gist_id=?2",
+            params![collection_id, gist_id],
+        )?;
+        Ok(())
+    })
+}
+
+pub fn list_collection_gists(collection_id: &str) -> Result<Vec<Gist>> {
+    with_db(|conn| {
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {GIST_ROW_G} FROM gists g
+             JOIN collection_gists cg ON cg.gist_id = g.id
+             WHERE cg.collection_id = ?1
+             ORDER BY g.pinned DESC, cg.added_at DESC",
+        ))?;
+        let mut gists = stmt
+            .query_map(params![collection_id], |row| row_to_gist(conn, row))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        for g in &mut gists {
+            g.files = load_files(conn, &g.id)?;
+        }
+        Ok(gists)
+    })
+}
+
+pub fn get_gist_collections(gist_id: &str) -> Result<Vec<Collection>> {
+    with_db(|conn| {
+        conn.prepare(
+            "SELECT c.id, c.name, c.description, c.color, c.icon, c.created_at, c.updated_at
+             FROM collections c
+             JOIN collection_gists cg ON cg.collection_id = c.id
+             WHERE cg.gist_id = ?1
+             ORDER BY c.name COLLATE NOCASE ASC",
+        )?
+        .query_map(params![gist_id], |r| {
+            Ok(Collection {
+                id:          r.get(0)?,
+                name:        r.get(1)?,
+                description: r.get(2)?,
+                color:       r.get(3)?,
+                icon:        r.get(4)?,
+                created_at:  r.get(5)?,
+                updated_at:  r.get(6)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
     })
 }

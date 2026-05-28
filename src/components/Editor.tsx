@@ -7,15 +7,26 @@
  *   "Keep mine" (overwrite remote) or "Take remote" (discard local edits).
  */
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useKeyboard } from "../hooks/useKeyboard";
 import MonacoEditor from "@monaco-editor/react";
 import { useGistStore, useSelectedGist } from "../store/useGistStore";
+import { useT } from "../store/useI18nStore";
+import { notify } from "../store/useNotificationStore";
 import { useDebounce } from "../hooks/useDebounce";
 import { TagInput } from "./TagInput";
 import { MarkdownPreview } from "./MarkdownPreview";
-import { DiffModal } from "./DiffModal";
+import { RevisionBrowser } from "./RevisionBrowser";
+import { AIPanel } from "./AIPanel";
+import { RunPanel } from "./RunPanel";
+import { SaveAsTemplateModal } from "./TemplatesModal";
+import { ShareModal } from "./ShareModal";
+import { PromptLibrary } from "./PromptLibrary";
+import { CollectionPicker } from "./CollectionPicker";
+import { ContextMenu } from "./ContextMenu";
+import type { ContextMenuEntry } from "./ContextMenu";
 import * as api from "../api/tauri";
-import type { GistFile } from "../api/tauri";
-import { notify } from "../store/useNotificationStore";
+import type { GistFile, Template } from "../api/tauri";
+import { RUNNABLE_EXTENSIONS } from "../api/tauri";
 import { useThemeStore, resolveMonacoTheme } from "../store/useThemeStore";
 import { useEditorUIStore } from "../store/useEditorUIStore";
 
@@ -72,9 +83,16 @@ export function Editor() {
     loadGistTags,
     setGistTags,
     createTag,
-    githubLogin,
+    publishGist,
+    networkOnline,
+    gists,
+    selectedId,
+    selectGist,
+    openTabIds,
+    closeTab,
   } = useGistStore();
 
+  const t = useT();
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [localFiles, setLocalFiles] = useState<GistFile[]>([]);
   const [description, setDescription] = useState("");
@@ -86,7 +104,13 @@ export function Editor() {
   // True once the user has made any change in the current edit session.
   const [isDirty, setIsDirty] = useState(false);
 
-  const [diffOpen, setDiffOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showAI, setShowAI] = useState(false);
+  const [showRun, setShowRun] = useState(false);
+  const [runTrigger, setRunTrigger] = useState(0);
+  const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false);
+  const [showShare, setShowShare] = useState(false);
+  const [showPromptLib, setShowPromptLib] = useState(false);
   const { presetId, editorFontSize, vimMode } = useThemeStore();
   const monacoTheme = resolveMonacoTheme(presetId);
   const { setCursor, setSelection, setActiveFilename } = useEditorUIStore();
@@ -96,6 +120,13 @@ export function Editor() {
 
   // Track filenames deleted locally so pushToGitHub can send null to the API.
   const [deletedFiles, setDeletedFiles] = useState<Set<string>>(new Set());
+
+  // Drag-to-reorder state
+  const [dragSrc, setDragSrc] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState<string | null>(null);
+
+  // Tab right-click context menu
+  const [tabCtx, setTabCtx] = useState<{ filename: string; x: number; y: number } | null>(null);
 
   // Inline rename state
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
@@ -130,7 +161,7 @@ export function Editor() {
     );
     setIsDirty(false);
     setConflict(null);
-    setDiffOpen(false);
+    setShowHistory(false);
     setDeletedFiles(new Set());
     setRenamingFile(null);
     // Load tags for the newly selected gist
@@ -206,7 +237,7 @@ export function Editor() {
         await saveGistDraft(gist.id, desc, pairs);
         setIsDirty(false);
       } catch (e) {
-        notify("草稿保存失败: " + String(e));
+        notify(t.editor.publishFailed + " " + String(e));
       } finally {
         isWriting.current = false;
         setSaving(false);
@@ -236,9 +267,9 @@ export function Editor() {
       }
       await updateGist(gist.id, description, fileMap);
       setDeletedFiles(new Set());
-      notify("已同步到 GitHub", "success");
+      notify(t.editor.publishSuccess, "success");
     } catch (e) {
-      notify("同步到 GitHub 失败: " + String(e));
+      notify(t.editor.publishFailed + " " + String(e));
     } finally {
       isWriting.current = false;
       setSaving(false);
@@ -300,6 +331,44 @@ export function Editor() {
     debouncedSave(updated, description);
   };
 
+  const handleReorderFiles = (fromName: string, toName: string) => {
+    if (fromName === toName) return;
+    const files = [...localFiles];
+    const fromIdx = files.findIndex((f) => f.filename === fromName);
+    const toIdx = files.findIndex((f) => f.filename === toName);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [item] = files.splice(fromIdx, 1);
+    files.splice(toIdx, 0, item);
+    setLocalFiles(files);
+    setIsDirty(true);
+    debouncedSave(files, description);
+  };
+
+  const handleCloseOthers = (filename: string) => {
+    if (localFiles.length <= 1) return;
+    const toDelete = localFiles.filter((f) => f.filename !== filename);
+    setDeletedFiles((prev) => new Set([...prev, ...toDelete.map((f) => f.filename)]));
+    const keep = [localFiles.find((f) => f.filename === filename)!];
+    setLocalFiles(keep);
+    setActiveFile(filename);
+    setIsDirty(true);
+    debouncedSave(keep, description);
+  };
+
+  const handleCloseToRight = (filename: string) => {
+    const idx = localFiles.findIndex((f) => f.filename === filename);
+    if (idx >= localFiles.length - 1) return;
+    const toDelete = localFiles.slice(idx + 1);
+    setDeletedFiles((prev) => new Set([...prev, ...toDelete.map((f) => f.filename)]));
+    const keep = localFiles.slice(0, idx + 1);
+    setLocalFiles(keep);
+    if (!keep.some((f) => f.filename === activeFile)) {
+      setActiveFile(keep[keep.length - 1]?.filename ?? null);
+    }
+    setIsDirty(true);
+    debouncedSave(keep, description);
+  };
+
   const startRename = (filename: string) => {
     setRenamingFile(filename);
     setRenameValue(filename);
@@ -314,7 +383,7 @@ export function Editor() {
       return;
     }
     if (localFiles.some((f) => f.filename !== renamingFile && f.filename === trimmed)) {
-      notify("文件名已存在: " + trimmed);
+      notify(t.editor.fileExists + " " + trimmed);
       return;
     }
     // Only track old name as deleted for GitHub if it was synced from remote
@@ -354,7 +423,7 @@ export function Editor() {
       setIsDirty(false);
       setConflict(null);
     } catch (e) {
-      notify("保留本地版本失败: " + String(e));
+      notify(t.editor.keepLocalFailed + " " + String(e));
     } finally {
       isWriting.current = false;
       setSaving(false);
@@ -372,7 +441,7 @@ export function Editor() {
       setIsDirty(false);
       setConflict(null);
     } catch (e) {
-      notify("拉取远端版本失败: " + String(e));
+      notify(t.editor.takeRemoteFailed + " " + String(e));
     } finally {
       isWriting.current = false;
       setSaving(false);
@@ -402,6 +471,51 @@ export function Editor() {
     return () => window.clearTimeout(id);
   }, [mdPreviewKey, activeContent, isMdActive]);
 
+  // ── History panel toggle (must be above early return) ────────────────────
+  const toggleHistory = useCallback(() => {
+    setShowHistory((v) => !v);
+    setShowAI(false);
+  }, []);
+  useKeyboard("h", "meta+shift", toggleHistory);
+
+  const toggleAI = useCallback(() => {
+    setShowAI((v) => !v);
+    setShowHistory(false);
+  }, []);
+  useKeyboard("a", "meta+shift", toggleAI);
+
+  const openSaveAsTemplate = useCallback(() => setShowSaveAsTemplate(true), []);
+  useKeyboard("t", "meta+shift", openSaveAsTemplate);
+
+  const openShare = useCallback(() => setShowShare(true), []);
+  useKeyboard("s", "meta+shift", openShare);
+
+  // Whether the active file can be executed
+  const activeExt = activeFile?.split(".").pop()?.toLowerCase() ?? "";
+  const isRunnable = RUNNABLE_EXTENSIONS.has(activeExt);
+
+  const handleRun = useCallback(() => {
+    setShowRun(true);
+    setShowHistory(false);
+    setShowAI(false);
+    setRunTrigger((n) => n + 1);
+  }, []);
+  useKeyboard("e", "meta+shift", handleRun);
+
+  // ── Tab keyboard navigation (must be above early return) ─────────────────
+  const gotoPrevTab = useCallback(() => {
+    if (!localFiles.length || !activeFile) return;
+    const idx = localFiles.findIndex((f) => f.filename === activeFile);
+    setActiveFile(localFiles[(idx - 1 + localFiles.length) % localFiles.length].filename);
+  }, [localFiles, activeFile]);
+  const gotoNextTab = useCallback(() => {
+    if (!localFiles.length || !activeFile) return;
+    const idx = localFiles.findIndex((f) => f.filename === activeFile);
+    setActiveFile(localFiles[(idx + 1) % localFiles.length].filename);
+  }, [localFiles, activeFile]);
+  useKeyboard("[", "alt", gotoPrevTab);
+  useKeyboard("]", "alt", gotoNextTab);
+
   // ── Active file + vim mode (must be above early return) ──────────────────
 
   useEffect(() => {
@@ -428,6 +542,30 @@ export function Editor() {
       vimRef.current = null;
     }
   }, [vimMode, gist?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Global Find / Replace shortcuts ─────────────────────────────────────
+  // When Monaco is focused it handles ⌘F / ⌘H natively (and calls
+  // preventDefault, so e.defaultPrevented will be true by the time this
+  // window listener fires). We only act when Monaco is NOT focused.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
+      const isMeta = e.metaKey || e.ctrlKey;
+      if (!isMeta || e.shiftKey) return;
+      const key = e.key.toLowerCase();
+      if (key !== "f" && key !== "h") return;
+      if (!editorRef.current) return;
+      e.preventDefault();
+      editorRef.current.focus();
+      const actionId =
+        key === "h"
+          ? "editor.action.startFindReplaceAction"
+          : "actions.find";
+      editorRef.current.getAction(actionId)?.run();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
   const handleEditorMount = useCallback(
     (editor: any) => {
@@ -462,6 +600,16 @@ export function Editor() {
     );
   }
 
+  const openFind = () => {
+    editorRef.current?.focus();
+    editorRef.current?.getAction("actions.find")?.run();
+  };
+
+  const openReplace = () => {
+    editorRef.current?.focus();
+    editorRef.current?.getAction("editor.action.startFindReplaceAction")?.run();
+  };
+
   const editorOptions = {
     fontSize: editorFontSize,
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -473,16 +621,49 @@ export function Editor() {
     smoothScrolling: true,
     cursorBlinking: "smooth" as const,
     padding: { top: 16 },
+    find: {
+      addExtraSpaceOnTop: false,
+      autoFindInSelection: "multiline" as const,
+      seedSearchStringFromSelection: "always" as const,
+    },
   };
 
   return (
     <div className="editor">
 
+      {/* Gist tab bar — shown when ≥1 gist is explicitly opened in a tab */}
+      {openTabIds.length > 0 && (
+        <div className="editor__gist-tabs">
+          {openTabIds.map((tabId) => {
+            const g = gists.find((x) => x.id === tabId);
+            const label = g
+              ? (g.description?.trim() || g.files[0]?.filename || tabId.slice(0, 8))
+              : tabId.slice(0, 8);
+            const isActive = tabId === selectedId;
+            return (
+              <div
+                key={tabId}
+                className={`editor__gist-tab${isActive ? " editor__gist-tab--active" : ""}`}
+                onClick={() => selectGist(tabId)}
+                title={g?.description || label}
+              >
+                <span className="editor__gist-tab-label">{label}</span>
+                <button
+                  className="editor__gist-tab-close"
+                  onClick={(e) => { e.stopPropagation(); closeTab(tabId); }}
+                  title="Close tab"
+                >×</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Conflict banner */}
       {conflict && (
         <div className="conflict-banner">
           <span className="conflict-banner__msg">
-            ⚠ Remote version updated while you were editing
+            {t.editor.conflictBanner}
           </span>
           <div className="conflict-banner__actions">
             <button
@@ -490,13 +671,13 @@ export function Editor() {
               onClick={handleKeepMine}
               disabled={saving}
             >
-              Keep mine
+              {t.editor.keepMine}
             </button>
             <button
               className="btn conflict-banner__btn"
               onClick={handleTakeRemote}
             >
-              Take remote
+              {t.editor.takeRemote}
             </button>
           </div>
         </div>
@@ -507,13 +688,13 @@ export function Editor() {
           className="editor__description"
           value={description}
           onChange={handleDescChange}
-          placeholder="Gist description…"
+          placeholder={t.editor.descriptionPlaceholder}
         />
         <div className="editor__actions">
           {isDirty && !saving && (
             <span
               className="editor__dirty"
-              title="正在输入，尚未写入本地数据库"
+              title={t.editor.typingNotSaved}
             >
               ●
             </span>
@@ -521,37 +702,126 @@ export function Editor() {
           {!isDirty && gist.pending_push && !saving && (
             <span
               className="editor__pending-push"
-              title="已保存到本地，尚未同步到 GitHub"
+              title={t.editor.savedLocally}
             >
               ↑
             </span>
           )}
           {saving && (
-            <span className="editor__saving">保存中…</span>
+            <span className="editor__saving">{t.common.saving}</span>
+          )}
+          {gist.local_only ? (
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={async () => {
+                if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
+                try {
+                  await publishGist(gist.id);
+                  notify(t.editor.publishSuccess, "success");
+                } catch (e) {
+                  notify(t.editor.publishFailed + " " + String(e));
+                }
+              }}
+              disabled={saving || !networkOnline}
+              title={networkOnline ? t.editor.publish : t.editor.offline}
+            >
+              {networkOnline ? t.editor.publish : t.editor.offline}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={() => void pushToGitHub()}
+              disabled={saving || !gist.pending_push || !!conflict || isDirty}
+              title={isDirty ? t.editor.waitForSave : t.editor.syncToGitHubTitle}
+            >
+              {t.editor.syncToGitHub}
+            </button>
           )}
           <button
             type="button"
-            className="btn btn--primary"
-            onClick={() => void pushToGitHub()}
-            disabled={
-              saving || !gist.pending_push || !!conflict || isDirty
-            }
-            title={
-              isDirty
-                ? "请先等待本地自动保存完成"
-                : "将当前内容 PATCH 到 GitHub（产生新版本）"
-            }
+            className="btn editor__find-btn"
+            onClick={openFind}
+            title={t.editor.findTitle}
           >
-            同步到 GitHub
+            {t.editor.find}
+          </button>
+          <button
+            type="button"
+            className="btn editor__find-btn"
+            onClick={openReplace}
+            title={t.editor.replaceTitle}
+          >
+            {t.editor.replace}
+          </button>
+          <button
+            type="button"
+            className={`btn ${showHistory ? "btn--primary" : ""}`}
+            onClick={() => toggleHistory()}
+            title={t.editor.historyTitle}
+          >
+            {t.editor.history}
+          </button>
+          <button
+            type="button"
+            className={`btn ${showAI ? "btn--primary" : ""}`}
+            onClick={() => toggleAI()}
+            title={t.editor.aiTitle}
+          >
+            {t.editor.ai}
           </button>
           <button
             type="button"
             className="btn"
-            onClick={() => setDiffOpen(true)}
-            title="Revisions 时间线与 Working tree diff"
+            onClick={() => setShowSaveAsTemplate(true)}
+            title={t.editor.templateTitle}
           >
-            Diff
+            {t.editor.template}
           </button>
+          <button
+            type="button"
+            className={`btn editor__prompt-btn${gist.category === "prompt" ? " btn--prompt-active" : ""}`}
+            onClick={async () => {
+              if (gist.category === "prompt") {
+                await api.setGistCategory(gist.id, "gist");
+                notify(t.editor.promptRemoved, "success");
+              } else {
+                await api.setGistCategory(gist.id, "prompt");
+                notify(t.editor.promptAdded, "success");
+              }
+              await useGistStore.getState().loadGists();
+            }}
+            title={gist.category === "prompt" ? t.editor.removeFromPrompt : t.editor.addToPrompt}
+          >
+            {gist.category === "prompt" ? t.editor.promptStar : t.editor.promptEmpty}
+          </button>
+          <button
+            type="button"
+            className="btn editor__prompt-lib-btn"
+            onClick={() => setShowPromptLib(true)}
+            title={t.editor.libraryTitle}
+          >
+            {t.editor.library}
+          </button>
+          <button
+            type="button"
+            className="btn editor__share-btn"
+            onClick={() => setShowShare(true)}
+            title={t.editor.shareTitle}
+          >
+            {t.editor.share}
+          </button>
+          {isRunnable && (
+            <button
+              type="button"
+              className={`btn editor__run-btn ${showRun ? "btn--primary" : ""}`}
+              onClick={handleRun}
+              title={t.editor.runTitle}
+            >
+              {t.editor.run}
+            </button>
+          )}
           <a
             className="btn btn--ghost"
             href={gist.html_url}
@@ -562,19 +832,32 @@ export function Editor() {
               );
             }}
           >
-            View on GitHub ↗
+            {t.editor.viewOnGitHub}
           </a>
           <button
             className="btn btn--danger"
             onClick={() => {
-              if (confirm("Delete this gist?"))
-                deleteGist(gist.id).catch((e) => notify("删除失败: " + String(e)));
+              if (confirm(t.editor.deleteConfirm))
+                deleteGist(gist.id).catch((e) => notify(t.editor.deleteFailed + " " + String(e)));
             }}
           >
-            Delete
+            {t.editor.delete}
           </button>
         </div>
       </div>
+
+      {/* Local draft banner */}
+      {gist.local_only && (
+        <div className="editor__draft-banner">
+          <span className="editor__draft-banner__icon">✎</span>
+          <span className="editor__draft-banner__text">
+            {t.editor.localDraft}
+          </span>
+          {!networkOnline && (
+            <span className="editor__draft-banner__offline">{t.editor.offline}</span>
+          )}
+        </div>
+      )}
 
       {/* Tag row */}
       <TagInput
@@ -597,63 +880,133 @@ export function Editor() {
         }}
       />
 
+      {/* Collection row */}
+      <CollectionPicker gistId={gist.id} />
+
       {/* File tabs */}
       <div className="editor__tabs">
-        {localFiles.map((f) => (
-          <div
-            key={f.filename}
-            className={`editor__tab ${f.filename === activeFile ? "editor__tab--active" : ""}`}
-            onClick={() => { if (renamingFile !== f.filename) setActiveFile(f.filename); }}
-            onDoubleClick={() => startRename(f.filename)}
-          >
-            {renamingFile === f.filename ? (
-              <input
-                ref={renameInputRef}
-                className="editor__tab-rename"
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onBlur={commitRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") commitRename();
-                  if (e.key === "Escape") setRenamingFile(null);
-                }}
-                onClick={(e) => e.stopPropagation()}
-                autoFocus
-              />
-            ) : (
-              <span className="editor__tab-name">{f.filename}</span>
-            )}
-            {isDirty && f.filename === activeFile && (
-              <span className="editor__tab-dot">●</span>
-            )}
-            {localFiles.length > 1 && (
-              <button
-                className="editor__tab-close"
-                title={`删除 ${f.filename}`}
-                onClick={(e) => { e.stopPropagation(); handleDeleteFile(f.filename); }}
-              >
-                ×
-              </button>
-            )}
-          </div>
-        ))}
+        {localFiles.map((f) => {
+          const isActive = f.filename === activeFile;
+          const isDragging = dragSrc === f.filename;
+          const isDropTarget = dragOver === f.filename && dragSrc !== f.filename;
+          return (
+            <div
+              key={f.filename}
+              className={[
+                "editor__tab",
+                isActive ? "editor__tab--active" : "",
+                isDragging ? "editor__tab--dragging" : "",
+                isDropTarget ? "editor__tab--drop-target" : "",
+              ].filter(Boolean).join(" ")}
+              onClick={() => { if (renamingFile !== f.filename) setActiveFile(f.filename); }}
+              onDoubleClick={() => startRename(f.filename)}
+              onMouseDown={(e) => {
+                // Middle-click closes tab
+                if (e.button === 1 && localFiles.length > 1) {
+                  e.preventDefault();
+                  handleDeleteFile(f.filename);
+                }
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTabCtx({ filename: f.filename, x: e.clientX, y: e.clientY });
+              }}
+              draggable={renamingFile !== f.filename}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = "move";
+                setDragSrc(f.filename);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                setDragOver(f.filename);
+              }}
+              onDragLeave={() => setDragOver((v) => v === f.filename ? null : v)}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragSrc) handleReorderFiles(dragSrc, f.filename);
+                setDragSrc(null);
+                setDragOver(null);
+              }}
+              onDragEnd={() => { setDragSrc(null); setDragOver(null); }}
+            >
+              {renamingFile === f.filename ? (
+                <input
+                  ref={renameInputRef}
+                  className="editor__tab-rename"
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename();
+                    if (e.key === "Escape") setRenamingFile(null);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  autoFocus
+                />
+              ) : (
+                <span className="editor__tab-name">{f.filename}</span>
+              )}
+              {isDirty && isActive && (
+                <span className="editor__tab-dot">●</span>
+              )}
+              {localFiles.length > 1 && (
+                <button
+                  className="editor__tab-close"
+                  title={`Close ${f.filename}`}
+                  onClick={(e) => { e.stopPropagation(); handleDeleteFile(f.filename); }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          );
+        })}
         <button
           className="editor__tab editor__tab--add"
           onClick={handleAddFile}
-          title="新增文件"
+          title={t.editor.newFile}
         >
           +
         </button>
       </div>
 
+      {/* Tab context menu */}
+      {tabCtx && (() => {
+        const { filename, x, y } = tabCtx;
+        const idx = localFiles.findIndex((f) => f.filename === filename);
+        const items: ContextMenuEntry[] = [
+          { label: t.editor.renameTab, shortcut: t.editor.renameShortcut, onClick: () => startRename(filename) },
+          { separator: true },
+          {
+            label: t.editor.closeTab,
+            onClick: () => handleDeleteFile(filename),
+            disabled: localFiles.length <= 1,
+          },
+          {
+            label: t.editor.closeOthers,
+            onClick: () => handleCloseOthers(filename),
+            disabled: localFiles.length <= 1,
+          },
+          {
+            label: t.editor.closeToRight,
+            onClick: () => handleCloseToRight(filename),
+            disabled: idx >= localFiles.length - 1,
+          },
+        ];
+        return (
+          <ContextMenu x={x} y={y} items={items} onClose={() => setTabCtx(null)} />
+        );
+      })()}
+
       {/* Markdown view mode tabs (only for .md files) */}
       {isMdActive && (
-        <div className="editor__md-tabs" role="tablist" aria-label="Markdown 视图">
+        <div className="editor__md-tabs" role="tablist" aria-label={t.editor.mdViewLabel}>
           {(
             [
-              ["source", "源码"] as const,
-              ["preview", "预览"] as const,
-              ["split", "分栏"] as const,
+              ["source", t.editor.mdSource] as const,
+              ["preview", t.editor.mdPreview] as const,
+              ["split", t.editor.mdSplit] as const,
             ] satisfies readonly [MdViewMode, string][]
           ).map(([mode, label]) => (
             <button
@@ -670,38 +1023,82 @@ export function Editor() {
         </div>
       )}
 
-      <div
-        className={`editor__body ${isMdActive ? `editor__body--md editor__body--md-${mdViewMode}` : ""}`}
-      >
-        <div className="editor__pane editor__pane--monaco">
-          <MonacoEditor
-            height="100%"
-            language={detectLanguage(activeFile ?? "")}
-            value={activeContent}
-            onChange={handleContentChange}
-            onMount={handleEditorMount}
-            theme={monacoTheme}
-            options={editorOptions}
-          />
-        </div>
-        {isMdActive && (
-          <div className="editor__pane editor__pane--preview">
-            <MarkdownPreview markdown={previewMarkdown} showCopyAll />
+      <div className="editor__content-wrap">
+        <div
+          className={`editor__body ${isMdActive ? `editor__body--md editor__body--md-${mdViewMode}` : ""}`}
+        >
+          <div className="editor__pane editor__pane--monaco">
+            <MonacoEditor
+              height="100%"
+              language={detectLanguage(activeFile ?? "")}
+              value={activeContent}
+              onChange={handleContentChange}
+              onMount={handleEditorMount}
+              theme={monacoTheme}
+              options={editorOptions}
+            />
           </div>
+          {isMdActive && (
+            <div className="editor__pane editor__pane--preview">
+              <MarkdownPreview markdown={previewMarkdown} showCopyAll />
+            </div>
+          )}
+        </div>
+
+        {showRun && (
+          <RunPanel
+            filename={activeFile ?? ""}
+            content={activeContent}
+            runTrigger={runTrigger}
+            onClose={() => setShowRun(false)}
+          />
+        )}
+        {showHistory && (
+          <RevisionBrowser
+            gistId={gist.id}
+            currentFiles={localFiles}
+            onRestore={(files, desc) => {
+              setLocalFiles(files.map((f) => ({ ...f })));
+              setDescription(desc);
+              setIsDirty(true);
+            }}
+            onClose={() => setShowHistory(false)}
+          />
+        )}
+        {showAI && (
+          <AIPanel
+            gistId={gist.id}
+            files={localFiles}
+            description={description}
+            onApplyDescription={(desc) => {
+              setDescription(desc);
+              setIsDirty(true);
+            }}
+            onClose={() => setShowAI(false)}
+          />
         )}
       </div>
 
       {vimMode && <div className="editor__vim-status" ref={vimStatusRef} />}
 
-      <DiffModal
-        open={diffOpen}
-        onClose={() => setDiffOpen(false)}
-        gistId={gist.id}
-        githubLogin={githubLogin}
-        gistUpdatedAt={gist.updated_at}
-        primaryFilename={activeFile ?? localFiles[0]?.filename ?? ""}
-        currentFiles={localFiles}
-      />
+      {showSaveAsTemplate && (
+        <SaveAsTemplateModal
+          gistId={gist.id}
+          defaultName={gist.description || gist.files[0]?.filename || "My Template"}
+          onClose={() => setShowSaveAsTemplate(false)}
+        />
+      )}
+      {showShare && (
+        <ShareModal gist={gist} onClose={() => setShowShare(false)} />
+      )}
+      {showPromptLib && (
+        <PromptLibrary
+          onNavigate={(id) => {
+            useGistStore.getState().selectGist(id);
+          }}
+          onClose={() => setShowPromptLib(false)}
+        />
+      )}
     </div>
   );
 }
@@ -711,41 +1108,68 @@ export function Editor() {
 export function NewGistModal({
   onClose,
   onCreate,
+  onCreateLocal,
+  networkOnline = true,
+  template,
 }: {
   onClose: () => void;
-  onCreate: (
-    desc: string,
-    pub: boolean,
-    files: [string, string][]
-  ) => Promise<unknown>;
+  onCreate: (desc: string, pub: boolean, files: [string, string][]) => Promise<unknown>;
+  onCreateLocal: (desc: string, pub: boolean, files: [string, string][]) => Promise<unknown>;
+  networkOnline?: boolean;
+  template?: Template;
 }) {
-  const [desc, setDesc] = useState("");
-  const [filename, setFilename] = useState("untitled.md");
-  const [content, setContent] = useState("");
-  const [isPublic, setIsPublic] = useState(false);
+  const t = useT();
+  const [desc, setDesc] = useState(template?.description ?? "");
+  const [filename, setFilename] = useState(
+    template?.files[0]?.filename ?? `${t.editor.untitled}.md`
+  );
+  const [content, setContent] = useState(template?.files[0]?.content ?? "");
+  const [isPublic, setIsPublic] = useState(template?.is_public ?? false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Close on Escape
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
+      if (e.key === "Escape") { e.stopPropagation(); onClose(); }
     };
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
+  const validate = () => {
+    if (!template) {
+      if (!filename.trim()) { setError(t.editor.filenameRequired); return false; }
+      if (!content.trim()) { setError(t.editor.contentEmpty); return false; }
+    }
+    setError(null);
+    return true;
+  };
+
+  const buildFiles = (): [string, string][] =>
+    template
+      ? template.files.map((f) => [f.filename, f.content] as [string, string])
+      : [[filename, content]];
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!filename.trim()) { setError("Filename is required"); return; }
-    if (!content.trim()) { setError("Content cannot be empty"); return; }
-    setError(null);
+    if (!validate()) return;
     setLoading(true);
     try {
-      await onCreate(desc, isPublic, [[filename, content]]);
+      await onCreate(desc, isPublic, buildFiles());
+      onClose();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSaveDraft = async () => {
+    if (!validate()) return;
+    setLoading(true);
+    try {
+      await onCreateLocal(desc, isPublic, buildFiles());
       onClose();
     } catch (err) {
       setError(String(err));
@@ -764,53 +1188,84 @@ export function NewGistModal({
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>New Gist</h2>
+        <h2>
+          {template ? t.editor.newGistFromTemplate(template.name) : t.editor.newGistTitle}
+        </h2>
+        {template && (
+          <div className="modal__template-info">
+            <span className="modal__template-label">{t.editor.templateFiles}</span>
+            {template.files.map((f) => (
+              <span key={f.filename} className="modal__template-file">
+                {f.filename}
+              </span>
+            ))}
+          </div>
+        )}
         <form onSubmit={handleCreate}>
           <label>
-            Description
+            {t.editor.descriptionLabel}
             <input
               value={desc}
               onChange={(e) => setDesc(e.target.value)}
               onKeyDown={blockEnter}
-              placeholder="Optional description"
+              placeholder={t.editor.descriptionOptional}
               autoFocus
             />
           </label>
-          <label>
-            Filename
-            <input
-              value={filename}
-              onChange={(e) => setFilename(e.target.value)}
-              onKeyDown={blockEnter}
-            />
-          </label>
-          <label>
-            Content
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={8}
-            />
-          </label>
+          {!template && (
+            <>
+              <label>
+                {t.editor.filenameLabel}
+                <input
+                  value={filename}
+                  onChange={(e) => setFilename(e.target.value)}
+                  onKeyDown={blockEnter}
+                />
+              </label>
+              <label>
+                {t.editor.contentLabel}
+                <textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  rows={8}
+                />
+              </label>
+            </>
+          )}
           <label className="modal__checkbox">
             <input
               type="checkbox"
               checked={isPublic}
               onChange={(e) => setIsPublic(e.target.checked)}
             />
-            Public gist
+            {t.editor.publicGist}
           </label>
           {error && <p className="modal__error">{error}</p>}
+          {!networkOnline && (
+            <p className="modal__offline-hint">
+              {t.editor.offlineDraftOnly}
+            </p>
+          )}
           <div className="modal__actions">
             <button type="button" className="btn" onClick={onClose}>
-              Cancel
+              {t.common.cancel}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              onClick={handleSaveDraft}
+              disabled={loading || (!template && (!filename.trim() || !content.trim()))}
+              title={t.editor.saveLocallyTitle}
+            >
+              {t.editor.saveDraft}
             </button>
             <button
               type="submit"
               className="btn btn--primary"
-              disabled={loading || !filename.trim() || !content.trim()}
+              disabled={loading || !networkOnline || (!template && (!filename.trim() || !content.trim()))}
+              title={networkOnline ? t.editor.createOnGitHubTitle : t.editor.offlineUseDraft}
             >
-              {loading ? "Creating…" : "Create"}
+              {loading ? t.editor.creating : t.editor.createOnGitHub}
             </button>
           </div>
         </form>

@@ -8,18 +8,34 @@ import { SettingsModal } from "./SettingsModal";
 import { CommandPalette } from "./CommandPalette";
 import { ImportModal } from "./ImportModal";
 import { ContentSearch } from "./ContentSearch";
+import { StatsPanel } from "./StatsPanel";
+import { ShortcutsModal } from "./ShortcutsModal";
+import { TemplatesModal } from "./TemplatesModal";
+import { NewGistModal } from "./Editor";
+import { GraphView } from "./GraphView";
 import { useGistStore } from "../store/useGistStore";
+import type { Template } from "../api/tauri";
 import { useKeyboard } from "../hooks/useKeyboard";
 import { useAutoSync } from "../hooks/useAutoSync";
 import { useThemeStore } from "../store/useThemeStore";
+import { listen } from "@tauri-apps/api/event";
+import { notify } from "../store/useNotificationStore";
 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 600;
 
 export function Layout() {
-  const { loadGists, sync } = useGistStore();
+  const {
+    loadGists, sync, selectGist, setNetworkOnline,
+    createGist, createLocalGist, networkOnline,
+  } = useGistStore();
   const [showSettings, setShowSettings] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
+  const [showStats, setShowStats] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
+  const [showGraph, setShowGraph] = useState(false);
   const [importPath, setImportPath] = useState<string | null>(null);
   const [showContentSearch, setShowContentSearch] = useState(false);
   const { sidebarWidth, setSidebarWidth, zenMode } = useThemeStore();
@@ -28,6 +44,38 @@ export function Layout() {
   useEffect(() => {
     loadGists().then(() => sync());
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for gist-open requests from the quick-search window.
+  useEffect(() => {
+    const unlisten = listen<{ id: string }>("open-gist", (e) => {
+      selectGist(e.payload.id);
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, [selectGist]);
+
+  // Track network status; notify when coming back online with pending local drafts.
+  useEffect(() => {
+    const handleOnline = () => {
+      setNetworkOnline(true);
+      const drafts = useGistStore.getState().gists.filter((g) => g.local_only);
+      if (drafts.length > 0) {
+        notify(
+          `Back online — ${drafts.length} local draft${drafts.length > 1 ? "s" : ""} ready to publish.`,
+          "success"
+        );
+      }
+    };
+    const handleOffline = () => {
+      setNetworkOnline(false);
+      notify("You're offline — new gists will be saved as local drafts.", "error");
+    };
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [setNetworkOnline]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useAutoSync();
 
@@ -44,6 +92,9 @@ export function Layout() {
     useThemeStore.getState().setZenMode(!useThemeStore.getState().zenMode);
   }, []);
   useKeyboard("\\", "meta", toggleZen);
+
+  const openShortcuts = useCallback(() => setShowShortcuts(true), []);
+  useKeyboard("?", "meta+shift", openShortcuts);
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -77,6 +128,10 @@ export function Layout() {
           onSettings={() => setShowSettings(true)}
           onPalette={() => setShowPalette(true)}
           onImport={(path) => setImportPath(path)}
+          onStats={() => setShowStats(true)}
+          onShortcuts={() => setShowShortcuts(true)}
+          onTemplates={() => setShowTemplates(true)}
+          onGraph={() => setShowGraph(true)}
         />
       )}
       <div className="layout__body">
@@ -90,7 +145,14 @@ export function Layout() {
           {showContentSearch && (
             <ContentSearch onClose={() => setShowContentSearch(false)} />
           )}
-          <Editor />
+          {showGraph ? (
+            <GraphView
+              onClose={() => setShowGraph(false)}
+              onSelectGist={(id) => { setShowGraph(false); selectGist(id); }}
+            />
+          ) : (
+            <Editor />
+          )}
         </main>
       </div>
       {!zenMode && <StatusBar />}
@@ -103,6 +165,26 @@ export function Layout() {
       )}
       {importPath && (
         <ImportModal filePath={importPath} onClose={() => setImportPath(null)} />
+      )}
+      {showStats && <StatsPanel onClose={() => setShowStats(false)} />}
+      {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
+      {showTemplates && (
+        <TemplatesModal
+          onClose={() => setShowTemplates(false)}
+          onUseTemplate={(t) => {
+            setShowTemplates(false);
+            setPendingTemplate(t);
+          }}
+        />
+      )}
+      {pendingTemplate && (
+        <NewGistModal
+          onClose={() => setPendingTemplate(null)}
+          onCreate={createGist}
+          onCreateLocal={createLocalGist}
+          networkOnline={networkOnline}
+          template={pendingTemplate}
+        />
       )}
     </div>
   );

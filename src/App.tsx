@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getToken, getCurrentLogin } from "./api/tauri";
 import { useGistStore } from "./store/useGistStore";
-import { TokenSetup } from "./components/TokenSetup";
+import { Onboarding } from "./components/Onboarding";
 import { Layout } from "./components/Layout";
 import "./styles/global.css";
 
@@ -25,6 +25,6 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (checking) return <div className="splash">Loading…</div>;
-  if (!isAuthenticated) return <TokenSetup />;
+  if (!isAuthenticated) return <Onboarding />;
   return <Layout />;
 }

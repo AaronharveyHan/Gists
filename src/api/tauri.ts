@@ -27,6 +27,8 @@ export interface Gist {
   /** Coarse language group: web | systems | scripting | data | docs | other */
   lang_group?: string;
   pinned?: boolean;
+  /** True for gists that live only in local SQLite and have never been pushed to GitHub. */
+  local_only?: boolean;
 }
 
 export interface CategoryCount {
@@ -154,6 +156,16 @@ export const listGistsByCategory = (category: string): Promise<Gist[]> =>
 export const listCategoryCounts = (): Promise<CategoryCount[]> =>
   invoke("list_category_counts");
 
+export interface TagCount {
+  id: number;
+  name: string;
+  color: string;
+  count: number;
+}
+
+export const listTagCounts = (): Promise<TagCount[]> =>
+  invoke("list_tag_counts");
+
 export const setGistCategory = (
   gistId: string,
   category: string
@@ -199,6 +211,10 @@ export const fetchRevDiff = (
   prevSha: string | null
 ): Promise<string> => invoke("fetch_rev_diff", { gistId, sha, prevSha });
 
+/** Fetch the full gist snapshot at a specific revision SHA. Used for restore. */
+export const fetchGistAtRev = (gistId: string, sha: string): Promise<Gist> =>
+  invoke("fetch_gist_at_rev", { gistId, sha });
+
 /** Export all cached gists (with tags/pins/categories) to a single JSON file. */
 export const exportGists = (destPath: string): Promise<number> =>
   invoke("export_gists", { destPath });
@@ -223,3 +239,223 @@ export const importExecute = (
   filePath: string,
   gistIds: string[]
 ): Promise<number> => invoke("import_execute", { filePath, gistIds });
+
+// ── AI ────────────────────────────────────────────────────────────────────────
+
+export interface AiConfig {
+  base_url: string;
+  model: string;
+  has_key: boolean;
+  embedding_model: string;
+  /** Empty string means "same as base_url". */
+  embedding_base_url: string;
+}
+
+export const getAiConfig = (): Promise<AiConfig> => invoke("get_ai_config");
+
+export const saveAiConfig = (
+  base_url: string,
+  api_key: string,
+  model: string,
+  embedding_model: string,
+  embedding_base_url: string
+): Promise<void> =>
+  invoke("save_ai_config", {
+    baseUrl: base_url,
+    apiKey: api_key,
+    model,
+    embeddingModel: embedding_model,
+    embeddingBaseUrl: embedding_base_url,
+  });
+
+// ── Semantic search ───────────────────────────────────────────────────────────
+
+export interface SemanticResult {
+  gist_id: string;
+  score: number;
+}
+
+export interface EmbeddingProgress {
+  indexed: number;
+  total: number;
+  running: boolean;
+  error?: string;
+}
+
+export const semanticSearch = (
+  query: string,
+  limit = 20
+): Promise<SemanticResult[]> =>
+  invoke("semantic_search", { query, limit });
+
+export const getEmbeddingStatus = (): Promise<EmbeddingProgress> =>
+  invoke("get_embedding_status");
+
+export const startEmbeddingIndexer = (): Promise<void> =>
+  invoke("start_embedding_indexer");
+
+export interface AiMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export const aiChat = (streamId: string, messages: AiMessage[]): Promise<void> =>
+  invoke("ai_chat", { streamId, messages });
+
+// ── Local draft / offline-first ───────────────────────────────────────────────
+
+// ── Relation graph ────────────────────────────────────────────────────────────
+
+/** Returns all [gist_id, tag_id] pairs for building the relation graph. */
+export const listGistTagPairs = (): Promise<[string, number][]> =>
+  invoke("list_gist_tag_pairs");
+
+// ── Code runner ───────────────────────────────────────────────────────────────
+
+/** File extensions the backend can execute. */
+export const RUNNABLE_EXTENSIONS = new Set([
+  "py", "js", "mjs", "cjs", "ts", "sh", "bash", "zsh", "rb", "php", "go",
+]);
+
+export interface RunLine {
+  text: string;
+  stream: "stdout" | "stderr";
+}
+
+export interface RunDone {
+  exit_code: number;
+  timed_out: boolean;
+  killed: boolean;
+}
+
+/** Start executing a file. Returns immediately; output arrives via run-line-{runId} events. */
+export const runCode = (
+  runId: string,
+  filename: string,
+  content: string
+): Promise<void> => invoke("run_code", { runId, filename, content });
+
+/** Send a kill signal to a running execution. */
+export const killRun = (runId: string): Promise<void> =>
+  invoke("kill_run", { runId });
+
+// ── Collections ───────────────────────────────────────────────────────────────
+
+export interface Collection {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  icon: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionCount {
+  id: string;
+  name: string;
+  color: string;
+  icon: string;
+  count: number;
+}
+
+export const listCollections = (): Promise<Collection[]> =>
+  invoke("list_collections");
+
+export const listCollectionCounts = (): Promise<CollectionCount[]> =>
+  invoke("list_collection_counts");
+
+export const createCollection = (
+  name: string,
+  description: string,
+  color: string,
+  icon: string
+): Promise<Collection> =>
+  invoke("create_collection", { name, description, color, icon });
+
+export const updateCollection = (
+  id: string,
+  name: string,
+  description: string,
+  color: string,
+  icon: string
+): Promise<Collection> =>
+  invoke("update_collection", { id, name, description, color, icon });
+
+export const deleteCollection = (id: string): Promise<void> =>
+  invoke("delete_collection", { id });
+
+export const addGistToCollection = (
+  collectionId: string,
+  gistId: string
+): Promise<void> => invoke("add_gist_to_collection", { collectionId, gistId });
+
+export const removeGistFromCollection = (
+  collectionId: string,
+  gistId: string
+): Promise<void> =>
+  invoke("remove_gist_from_collection", { collectionId, gistId });
+
+export const listCollectionGists = (collectionId: string): Promise<Gist[]> =>
+  invoke("list_collection_gists", { collectionId });
+
+export const getGistCollections = (gistId: string): Promise<Collection[]> =>
+  invoke("get_gist_collections", { gistId });
+
+// ── Templates ─────────────────────────────────────────────────────────────────
+
+export interface TemplateFile {
+  id: number;
+  template_id: number;
+  filename: string;
+  content: string;
+  sort_order: number;
+}
+
+export interface Template {
+  id: number;
+  name: string;
+  description: string;
+  is_public: boolean;
+  files: TemplateFile[];
+  created_at: string;
+}
+
+export const listTemplates = (): Promise<Template[]> => invoke("list_templates");
+
+export const createTemplate = (
+  name: string,
+  description: string,
+  isPublic: boolean,
+  files: [string, string][]
+): Promise<Template> =>
+  invoke("create_template", { name, description, isPublic, files });
+
+export const updateTemplate = (
+  id: number,
+  name: string,
+  description: string,
+  isPublic: boolean,
+  files: [string, string][]
+): Promise<Template> =>
+  invoke("update_template", { id, name, description, isPublic, files });
+
+export const deleteTemplate = (id: number): Promise<void> =>
+  invoke("delete_template", { id });
+
+export const saveGistAsTemplate = (gistId: string, name: string): Promise<Template> =>
+  invoke("save_gist_as_template", { gistId, name });
+
+// ── Local draft / offline-first ───────────────────────────────────────────────
+
+/** Create a gist stored only in local SQLite. Never contacts GitHub. */
+export const createLocalGist = (
+  description: string,
+  pub: boolean,
+  files: [string, string][]
+): Promise<Gist> =>
+  invoke("create_local_gist", { description, public: pub, files });
+
+/** Publish a local-only draft to GitHub, migrating its ID to the real GitHub ID. */
+export const publishLocalGist = (localId: string): Promise<Gist> =>
+  invoke("publish_local_gist", { localId });

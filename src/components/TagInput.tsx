@@ -5,6 +5,7 @@
 import { useState, useRef, useEffect } from "react";
 import type { Tag } from "../api/tauri";
 import { notify } from "../store/useNotificationStore";
+import { useT } from "../store/useI18nStore";
 
 // Auto-assign a deterministic color based on the tag name.
 const PALETTE = [
@@ -30,6 +31,7 @@ interface TagInputProps {
 }
 
 export function TagInput({ tags, allTags, onAdd, onRemove, onCreateAndAdd }: TagInputProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -62,7 +64,7 @@ export function TagInput({ tags, allTags, onAdd, onRemove, onCreateAndAdd }: Tag
   const run = (fn: () => Promise<void>) => {
     setBusy(true);
     fn()
-      .catch((e) => notify("标签操作失败: " + String(e)))
+      .catch((e) => notify(t.tags.tagOpFailed + " " + String(e)))
       .finally(() => setBusy(false));
   };
 
@@ -107,7 +109,7 @@ export function TagInput({ tags, allTags, onAdd, onRemove, onCreateAndAdd }: Tag
             <button
               className="tag-chip__remove"
               onClick={() => onRemove(tag.id)}
-              title={`Remove tag "${tag.name}"`}
+              title={t.tags.removeTag(tag.name)}
               disabled={busy}
             >
               ×
@@ -119,10 +121,10 @@ export function TagInput({ tags, allTags, onAdd, onRemove, onCreateAndAdd }: Tag
           <button
             className="tag-input__add-btn"
             onClick={() => setOpen((o) => !o)}
-            title="Add tag"
+            title={t.tags.addTagTitle}
             disabled={busy}
           >
-            + tag
+            {t.tags.addTag}
           </button>
 
           {open && (
@@ -133,7 +135,7 @@ export function TagInput({ tags, allTags, onAdd, onRemove, onCreateAndAdd }: Tag
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Search or create…"
+                placeholder={t.tags.searchOrCreate}
               />
               <div className="tag-dropdown__list">
                 {available.map((tag) => (
@@ -154,12 +156,12 @@ export function TagInput({ tags, allTags, onAdd, onRemove, onCreateAndAdd }: Tag
                     className="tag-dropdown__item tag-dropdown__create"
                     onClick={handleCreate}
                   >
-                    + Create &ldquo;{input.trim()}&rdquo;
+                    {t.tags.createTag(input.trim())}
                   </button>
                 )}
                 {available.length === 0 && !canCreate && (
                   <div className="tag-dropdown__empty">
-                    {query ? "No matching tags" : "No tags yet — type to create one"}
+                    {query ? t.tags.noMatchingTags : t.tags.noTagsYet}
                   </div>
                 )}
               </div>

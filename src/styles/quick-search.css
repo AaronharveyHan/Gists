@@ -1,0 +1,228 @@
+/* ── Quick-Search floating window ─────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --qs-bg: #1e1e2e;
+  --qs-border: #313244;
+  --qs-text: #cdd6f4;
+  --qs-sub: #a6adc8;
+  --qs-muted: #6c7086;
+  --qs-hover: #2a2a3d;
+  --qs-active: #313244;
+  --qs-accent: #89b4fa;
+  --qs-radius: 12px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+/* ── Container ─────────────────────────────────────────────────────────── */
+
+.qs {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--qs-bg);
+  border: 1px solid var(--qs-border);
+  border-radius: var(--qs-radius);
+  color: var(--qs-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+}
+
+/* Invisible drag strip at top so the borderless window can still be moved */
+.qs__drag {
+  height: 6px;
+  flex-shrink: 0;
+  cursor: move;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* ── Search input ──────────────────────────────────────────────────────── */
+
+.qs__input-row {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--qs-border);
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.qs__search-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--qs-muted);
+  flex-shrink: 0;
+}
+
+.qs__input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--qs-text);
+  font-size: 16px;
+  line-height: 1.4;
+  caret-color: var(--qs-accent);
+}
+
+.qs__input::placeholder {
+  color: var(--qs-muted);
+}
+
+.qs__badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.qs__badge--green {
+  background: #26413c;
+  color: #a6e3a1;
+}
+
+.qs__badge--blue {
+  background: #1e2d4a;
+  color: #89b4fa;
+}
+
+/* ── Results list ──────────────────────────────────────────────────────── */
+
+.qs__list {
+  list-style: none;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+.qs__list::-webkit-scrollbar {
+  width: 4px;
+}
+.qs__list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.qs__list::-webkit-scrollbar-thumb {
+  background: var(--qs-border);
+  border-radius: 2px;
+}
+
+.qs__item {
+  padding: 9px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 80ms;
+}
+
+.qs__item:hover,
+.qs__item--active {
+  background: var(--qs-hover);
+  border-left-color: var(--qs-accent);
+}
+
+.qs__item-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qs__item-title {
+  flex: 1;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qs__item-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.qs__item-secret {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #3d2f2f;
+  color: #f38ba8;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.qs__item-lang {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: #000;
+  letter-spacing: 0.04em;
+}
+
+.qs__item-sub {
+  font-size: 11px;
+  color: var(--qs-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Empty state ───────────────────────────────────────────────────────── */
+
+.qs__empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--qs-muted);
+  font-size: 13px;
+}
+
+/* ── Footer hints ──────────────────────────────────────────────────────── */
+
+.qs__footer {
+  display: flex;
+  gap: 16px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--qs-border);
+  flex-shrink: 0;
+}
+
+.qs__hint {
+  font-size: 11px;
+  color: var(--qs-muted);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.qs__hint kbd {
+  font-family: inherit;
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid var(--qs-border);
+  border-radius: 3px;
+  background: var(--qs-active);
+  color: var(--qs-sub);
+}

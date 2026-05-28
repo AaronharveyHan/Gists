@@ -40,6 +40,8 @@ pub struct Gist {
     pub lang_group: String,
     #[serde(default)]
     pub pinned: bool,
+    #[serde(default)]
+    pub local_only: bool,
 }
 
 /// One row for sidebar category counts.
@@ -55,6 +57,28 @@ pub struct Tag {
     pub id: i64,
     pub name: String,
     pub color: String,
+}
+
+/// A user-created collection (workspace) that holds a named set of gists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub color: String,
+    pub icon: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Collection with gist count — used by the sidebar list.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionCount {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub icon: String,
+    pub count: i64,
 }
 
 /// Returned to the frontend after every sync call.
@@ -115,6 +139,7 @@ impl From<GitHubGist> for Gist {
             category: default_gist_category(),
             lang_group: default_lang_group(),
             pinned: false,
+            local_only: false,
         }
     }
 }

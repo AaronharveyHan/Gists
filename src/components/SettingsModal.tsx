@@ -1,13 +1,65 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useThemeStore, PRESETS } from "../store/useThemeStore";
+import { getAiConfig, saveAiConfig } from "../api/tauri";
+import { useT, useI18nStore } from "../store/useI18nStore";
+
+const DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+
+/** Returns true if the model name looks like a chat/completion model, not an embedding model. */
+function looksLikeChatModel(name: string): boolean {
+  if (!name.trim()) return false;
+  if (/embedding/i.test(name)) return false;
+  return /turbo|plus|max|mini|gpt|llama|mistral|mixtral|qwen\d|claude|gemini/i.test(name);
+}
+
+const MODEL_SUGGESTIONS = [
+  // DashScope / Qwen
+  "qwen-turbo", "qwen-plus", "qwen-max", "qwen-long",
+  // OpenAI
+  "gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo",
+  // Groq
+  "llama-3.1-70b-versatile", "mixtral-8x7b-32768",
+];
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
+  const { lang, setLang } = useI18nStore();
   const {
     presetId, accentOverride, editorFontSize, autoSyncMinutes,
     vimMode, zenMode,
     setPreset, setAccentOverride, setEditorFontSize, setAutoSyncMinutes,
     setVimMode, setZenMode,
   } = useThemeStore();
+
+  const [aiBaseUrl, setAiBaseUrl] = useState(DASHSCOPE_URL);
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiModel, setAiModel] = useState("qwen-turbo");
+  const [aiEmbeddingModel, setAiEmbeddingModel] = useState("text-embedding-v3");
+  const [aiHasKey, setAiHasKey] = useState(false);
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiSaved, setAiSaved] = useState(false);
+
+  useEffect(() => {
+    getAiConfig().then((cfg) => {
+      setAiBaseUrl(cfg.base_url);
+      setAiModel(cfg.model);
+      setAiEmbeddingModel(cfg.embedding_model);
+      setAiHasKey(cfg.has_key);
+    }).catch(() => {/* ignore if not configured yet */});
+  }, []);
+
+  const handleSaveAi = async () => {
+    setAiSaving(true);
+    try {
+      await saveAiConfig(aiBaseUrl, aiApiKey, aiModel, aiEmbeddingModel, "");
+      setAiHasKey(aiHasKey || aiApiKey.length > 0);
+      setAiApiKey("");
+      setAiSaved(true);
+      setTimeout(() => setAiSaved(false), 2000);
+    } finally {
+      setAiSaving(false);
+    }
+  };
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -27,11 +79,33 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="modal settings-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>Settings</h2>
+        <h2>{t.settings.title}</h2>
+
+        <div className="settings-modal__body">
+        {/* ── Language ────────────────────────────────────────────── */}
+        <section className="settings-section">
+          <div className="settings-section__title">{t.settings.languageSection}</div>
+          <div className="settings-row" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className={`btn${lang === "zh" ? " btn--primary" : ""}`}
+              onClick={() => setLang("zh")}
+            >
+              {t.settings.langZh}
+            </button>
+            <button
+              type="button"
+              className={`btn${lang === "en" ? " btn--primary" : ""}`}
+              onClick={() => setLang("en")}
+            >
+              {t.settings.langEn}
+            </button>
+          </div>
+        </section>
 
         {/* ── Theme ─────────────────────────────────────────────────── */}
         <section className="settings-section">
-          <div className="settings-section__title">Theme</div>
+          <div className="settings-section__title">{t.settings.themeSection}</div>
           <div className="settings-theme-grid">
             {Object.entries(PRESETS).map(([id, def]) => (
               <button
@@ -79,14 +153,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         {/* ── Accent color ───────────────────────────────────────────── */}
         {showAccent && (
           <section className="settings-section">
-            <div className="settings-section__title">Accent Color</div>
+            <div className="settings-section__title">{t.settings.accentColor}</div>
             <div className="settings-row">
               <input
                 type="color"
                 value={accentValue}
                 onChange={(e) => setAccentOverride(e.target.value)}
                 className="settings-color-picker"
-                title="Pick a custom accent color"
+                title={t.settings.pickAccent}
               />
               <span
                 className="settings-accent-preview"
@@ -98,9 +172,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   type="button"
                   className="settings-reset-btn"
                   onClick={() => setAccentOverride(null)}
-                  title="Reset to theme default"
+                  title={t.settings.resetToDefault}
                 >
-                  Reset
+                  {t.settings.reset}
                 </button>
               )}
             </div>
@@ -109,25 +183,25 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
 
         {/* ── Auto-sync ──────────────────────────────────────────────── */}
         <section className="settings-section">
-          <div className="settings-section__title">Auto Sync</div>
+          <div className="settings-section__title">{t.settings.autoSync}</div>
           <div className="settings-row">
             <select
               className="settings-select"
               value={autoSyncMinutes}
               onChange={(e) => setAutoSyncMinutes(Number(e.target.value))}
             >
-              <option value={0}>Disabled</option>
-              <option value={5}>Every 5 minutes</option>
-              <option value={15}>Every 15 minutes</option>
-              <option value={30}>Every 30 minutes</option>
-              <option value={60}>Every hour</option>
+              <option value={0}>{t.settings.syncDisabled}</option>
+              <option value={5}>{t.settings.sync5}</option>
+              <option value={15}>{t.settings.sync15}</option>
+              <option value={30}>{t.settings.sync30}</option>
+              <option value={60}>{t.settings.sync60}</option>
             </select>
           </div>
         </section>
 
         {/* ── Editor font size ───────────────────────────────────────── */}
         <section className="settings-section">
-          <div className="settings-section__title">Editor Font Size</div>
+          <div className="settings-section__title">{t.settings.editorFontSize}</div>
           <div className="settings-row">
             <input
               type="range"
@@ -142,21 +216,21 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           </div>
           <div className="settings-row settings-row--hint">
             <span className="settings-hint" style={{ fontSize: editorFontSize }}>
-              The quick brown fox
+              {t.settings.fontPreview}
             </span>
           </div>
         </section>
 
         {/* ── Editor mode ─────────────────────────────────────────── */}
         <section className="settings-section">
-          <div className="settings-section__title">Editor</div>
+          <div className="settings-section__title">{t.settings.editorSection}</div>
           <label className="modal__checkbox">
             <input
               type="checkbox"
               checked={vimMode}
               onChange={(e) => setVimMode(e.target.checked)}
             />
-            Vim keybindings
+            {t.settings.vimMode}
           </label>
           <label className="modal__checkbox">
             <input
@@ -164,14 +238,120 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               checked={zenMode}
               onChange={(e) => setZenMode(e.target.checked)}
             />
-            Zen mode (hide sidebar &amp; toolbar)
+            {t.settings.zenMode}
             <kbd style={{ marginLeft: 6 }}>&#8984;\</kbd>
           </label>
         </section>
 
+        {/* ── AI Integration ─────────────────────────────────────── */}
+        <section className="settings-section">
+          <div className="settings-section__title">{t.settings.aiSection}</div>
+          <div className="settings-row settings-row--col">
+            <label className="settings-label">{t.settings.providerUrl}</label>
+            <input
+              type="text"
+              className="settings-input"
+              value={aiBaseUrl}
+              onChange={(e) => setAiBaseUrl(e.target.value)}
+              placeholder={DASHSCOPE_URL}
+            />
+            <div className="settings-hint-row">
+              <button
+                type="button"
+                className="settings-link"
+                onClick={() => setAiBaseUrl(DASHSCOPE_URL)}
+              >
+                DashScope (Aliyun)
+              </button>
+              <button
+                type="button"
+                className="settings-link"
+                onClick={() => setAiBaseUrl("https://api.openai.com/v1")}
+              >
+                OpenAI
+              </button>
+              <button
+                type="button"
+                className="settings-link"
+                onClick={() => setAiBaseUrl("https://api.groq.com/openai/v1")}
+              >
+                Groq
+              </button>
+            </div>
+          </div>
+          <div className="settings-row settings-row--col">
+            <label className="settings-label">
+              {t.settings.apiKey}
+              {aiHasKey && <span className="settings-badge settings-badge--ok">{t.settings.keySaved}</span>}
+            </label>
+            <input
+              type="password"
+              className="settings-input"
+              value={aiApiKey}
+              onChange={(e) => setAiApiKey(e.target.value)}
+              placeholder={aiHasKey ? t.settings.keyReplacePlaceholder : t.settings.keyNewPlaceholder}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="settings-row settings-row--col">
+            <label className="settings-label">{t.settings.chatModel}</label>
+            <input
+              type="text"
+              className="settings-input"
+              list="ai-models"
+              value={aiModel}
+              onChange={(e) => setAiModel(e.target.value)}
+              placeholder="qwen-turbo"
+            />
+            <datalist id="ai-models">
+              {MODEL_SUGGESTIONS.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </div>
+          <div className="settings-row settings-row--col">
+            <label className="settings-label">
+              {t.settings.embeddingModel}
+              <span className="settings-hint" style={{ marginLeft: 6 }}>
+                {t.settings.embeddingHint}
+              </span>
+            </label>
+            <input
+              type="text"
+              className={`settings-input${looksLikeChatModel(aiEmbeddingModel) ? " settings-input--warn" : ""}`}
+              list="ai-embed-models"
+              value={aiEmbeddingModel}
+              onChange={(e) => setAiEmbeddingModel(e.target.value)}
+              placeholder="text-embedding-v3"
+            />
+            {looksLikeChatModel(aiEmbeddingModel) && (
+              <div className="settings-warn">{t.settings.chatModelWarn}</div>
+            )}
+            <datalist id="ai-embed-models">
+              <option value="text-embedding-v3" />
+              <option value="text-embedding-v2" />
+              <option value="text-embedding-3-small" />
+              <option value="text-embedding-3-large" />
+              <option value="text-embedding-ada-002" />
+            </datalist>
+          </div>
+          <div className="settings-row">
+            <button
+              type="button"
+              className="btn btn--primary"
+              onClick={handleSaveAi}
+              disabled={aiSaving}
+            >
+              {aiSaving ? t.settings.saving : aiSaved ? t.settings.savedCheck : t.settings.saveAiConfig}
+            </button>
+          </div>
+        </section>
+
+        </div>{/* end settings-modal__body */}
+
         <div className="modal__actions">
           <button type="button" className="btn btn--primary" onClick={onClose}>
-            Done
+            {t.settings.done}
           </button>
         </div>
       </div>

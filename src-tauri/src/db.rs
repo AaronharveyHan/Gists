@@ -88,6 +88,55 @@ pub fn init_db(app_dir: &str) -> Result<()> {
         "ALTER TABLE gists ADD COLUMN category_user_set INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    let _ = conn.execute("ALTER TABLE gists ADD COLUMN local_only INTEGER NOT NULL DEFAULT 0", []);
+
+    // Semantic search embeddings table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS gist_embeddings (
+            gist_id     TEXT PRIMARY KEY REFERENCES gists(id) ON DELETE CASCADE,
+            version_key TEXT NOT NULL,
+            model       TEXT NOT NULL,
+            embedding   BLOB NOT NULL
+        );",
+    )?;
+
+    // Template system tables
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS templates (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            is_public   INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS template_files (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            template_id INTEGER NOT NULL REFERENCES templates(id) ON DELETE CASCADE,
+            filename    TEXT NOT NULL,
+            content     TEXT NOT NULL DEFAULT '',
+            sort_order  INTEGER NOT NULL DEFAULT 0
+        );",
+    )?;
+
+    // Collections (workspaces): user-defined named groups of gists
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS collections (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            color       TEXT NOT NULL DEFAULT '#8b949e',
+            icon        TEXT NOT NULL DEFAULT 'folder',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS collection_gists (
+            collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+            gist_id       TEXT NOT NULL REFERENCES gists(id)       ON DELETE CASCADE,
+            sort_order    INTEGER NOT NULL DEFAULT 0,
+            added_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (collection_id, gist_id)
+        );",
+    )?;
 
     // ── FTS v2 migration ──────────────────────────────────────────────────────
     // Upgrades the contentless FTS5 table to a full-content table with
@@ -183,6 +232,18 @@ where
         .lock()
         .map_err(|_| anyhow::anyhow!("DB lock poisoned"))?;
     f(&*guard)
+}
+
+pub fn with_db_mut<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce(&mut Connection) -> Result<T>,
+{
+    let mut guard = DB
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("DB not initialized"))?
+        .lock()
+        .map_err(|_| anyhow::anyhow!("DB lock poisoned"))?;
+    f(&mut *guard)
 }
 
 // ── settings ─────────────────────────────────────────────────────────────────
