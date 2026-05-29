@@ -60,7 +60,16 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # 7. 编译 + 创建 Release + 上传产物
+      # 7. 先编译 gist CLI —— 必须在 tauri build 打包之前。
+      #    原因：gist 是 src-tauri/Cargo.toml 里的第二个 [[bin]]，Tauri 打包器
+      #    会枚举包内所有二进制并尝试把它们放进 .deb / .msi。若此时 target/release/gist
+      #    不存在，deb 的文件拷贝与 Windows 的 light.exe 都会失败。提前构建即可让
+      #    打包阶段找到它（顺带把 CLI 一起装进安装包，桌面用户安装后即获得 gist 命令）。
+      - name: Build gist CLI (before bundling)
+        run: cargo build --release --features cli --bin gist
+        working-directory: src-tauri
+
+      # 8. 编译 + 创建 Release + 上传产物
       #    tauri-action 会：
       #    - 运行 npm run build（vite 构建前端）
       #    - 运行 cargo tauri build（编译 Rust + 打包）
@@ -80,6 +89,7 @@ jobs:
           releaseBody: |
             ## 安装说明
 
+            ### 桌面应用
             | 平台 | 下载文件 |
             |------|----------|
             | macOS | `.dmg` |
@@ -88,5 +98,44 @@ jobs:
             > **macOS 用户**：首次打开时若提示"无法验证开发者"，右键 → 打开 即可。
             > **Windows 用户**：SmartScreen 警告点"仍要运行"即可。
             > **Linux 用户**：`.AppImage` 下载后 `chmod +x` 即可运行；`.deb` 适用于 Debian/Ubuntu。
+
+            ### 命令行工具 `gist`（可选）
+            > 提示：`.deb` / `.msi` 桌面安装包已内置 `gist` 命令，安装桌面端后即可直接使用，无需单独下载。
+            > 仅需命令行工具、不想装桌面端的用户，可下载下方独立二进制：
+
+            | 平台 | 下载文件 |
+            |------|----------|
+            | macOS (Apple Silicon) | `gist-macos-arm64` |
+            | Windows (x86_64) | `gist-windows-x86_64.exe` |
+            | Linux (x86_64) | `gist-linux-x86_64` |
+            > macOS / Linux：`chmod +x gist-* && mv gist-* /usr/local/bin/gist`，然后 `gist save foo.py`。与桌面端共享同一数据库。
           releaseDraft: true      # 先创建草稿，检查产物无误后手动发布
           prerelease: false
+
+      # 9. 重命名为带平台后缀的资产名（避免三平台文件名冲突）
+      #    gist 已在第 7 步构建完成，这里直接复用 target/release 下的产物。
+      - name: Stage CLI binary (Unix)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            macos-latest) OUT=gist-macos-arm64 ;;
+            ubuntu-22.04) OUT=gist-linux-x86_64 ;;
+            *)            OUT=gist-unknown ;;
+          esac
+          cp src-tauri/target/release/gist "$OUT"
+          echo "CLI_ASSET=$OUT" >> "$GITHUB_ENV"
+
+      - name: Stage CLI binary (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          Copy-Item src-tauri\target\release\gist.exe gist-windows-x86_64.exe
+          "CLI_ASSET=gist-windows-x86_64.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # 10. 上传 CLI 到同一个 draft release（tauri-action 已创建好，按 tag 查找）
+      - name: Upload gist CLI to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ github.ref_name }}" "${{ env.CLI_ASSET }}" --clobber
