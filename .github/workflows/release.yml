@@ -14,6 +14,7 @@ jobs:
         platform:
           - macos-latest
           - windows-latest
+          - ubuntu-22.04   # Tauri v2 需 WebKitGTK 4.1，22.04 比 24.04 稳
 
     runs-on: ${{ matrix.platform }}
 
@@ -35,11 +36,31 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      # 5. 安装前端依赖
+      # 5. Linux 系统依赖（仅在 ubuntu 上执行）
+      #    Tauri v2 改用 WebKitGTK 4.1 + libsoup-3（v1 是 4.0 + libsoup2）。
+      #    托盘 / 全局快捷键插件额外需要 ayatana-appindicator 与 libxdo。
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            file \
+            build-essential \
+            curl \
+            wget
+
+      # 6. 安装前端依赖
       - name: Install frontend dependencies
         run: npm ci
 
-      # 6. 编译 + 创建 Release + 上传产物
+      # 7. 编译 + 创建 Release + 上传产物
       #    tauri-action 会：
       #    - 运行 npm run build（vite 构建前端）
       #    - 运行 cargo tauri build（编译 Rust + 打包）
@@ -49,6 +70,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 签名密钥：在 GitHub → Settings → Secrets and variables → Actions 中配置
+          # 生成方法：npx @tauri-apps/cli@2 signer generate
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}          # 例：v0.2.1
           releaseName: 'Gists Client ${{ github.ref_name }}'
@@ -59,7 +84,9 @@ jobs:
             |------|----------|
             | macOS | `.dmg` |
             | Windows | `.msi`（推荐）或 `.exe` |
+            | Linux | `.AppImage`（推荐，免安装）或 `.deb` |
             > **macOS 用户**：首次打开时若提示"无法验证开发者"，右键 → 打开 即可。
             > **Windows 用户**：SmartScreen 警告点"仍要运行"即可。
+            > **Linux 用户**：`.AppImage` 下载后 `chmod +x` 即可运行；`.deb` 适用于 Debian/Ubuntu。
           releaseDraft: true      # 先创建草稿，检查产物无误后手动发布
           prerelease: false
