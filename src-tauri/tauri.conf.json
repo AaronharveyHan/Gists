@@ -60,7 +60,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEwOEE5NEM2RTYyQkUyMkMKUldRczRpdm14cFNLRU1lbTdSTThqWW8yWStUbG5TRHh6Q3UrSExDYy92UDR0dEJIaFFDUVg0VmoK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVFRTA4MDRBNkJDRjdFNDIKUldSQ2ZzOXJTb0RnN2pWVk4za1M2MTJKQzhOWGhDSmRuUEcwN2tDTnFBRUFuNytoR2pJMFNCZmEK",
       "endpoints": [
         "https://github.com/AaronharveyHan/gists_client/releases/latest/download/latest.json"
       ]
