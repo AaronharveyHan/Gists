@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
-import { open } from "@tauri-apps/api/shell";
+import { open } from "@tauri-apps/plugin-shell";
 import { setToken, saveAiConfig } from "../api/tauri";
 import { useGistStore } from "../store/useGistStore";
+import { useAuthStore } from "../store/useAuthStore";
 import { useT } from "../store/useI18nStore";
+import { AI_PROVIDERS } from "../data/aiProviders";
 
 // ── Step indicators ───────────────────────────────────────────────────────────
 
@@ -195,48 +197,7 @@ function StepGitHub({
 
 // ── STEP 2: AI Setup ──────────────────────────────────────────────────────────
 
-const PROVIDERS = [
-  {
-    label: "DashScope (Aliyun)",
-    url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    chatModel: "qwen-turbo",
-    embedModel: "text-embedding-v3",
-    keyHint: "sk-… (DashScope API Key)",
-    docsUrl: "https://dashscope.aliyuncs.com",
-  },
-  {
-    label: "OpenAI",
-    url: "https://api.openai.com/v1",
-    chatModel: "gpt-4o-mini",
-    embedModel: "text-embedding-3-small",
-    keyHint: "sk-… (OpenAI API Key)",
-    docsUrl: "https://platform.openai.com/api-keys",
-  },
-  {
-    label: "SiliconFlow",
-    url: "https://api.siliconflow.cn/v1",
-    chatModel: "Qwen/Qwen2.5-7B-Instruct",
-    embedModel: "BAAI/bge-m3",
-    keyHint: "sk-… (SiliconFlow API Key)",
-    docsUrl: "https://siliconflow.cn",
-  },
-  {
-    label: "Ollama (local)",
-    url: "http://localhost:11434/v1",
-    chatModel: "llama3.2",
-    embedModel: "nomic-embed-text",
-    keyHint: "ollama (or leave empty)",
-    docsUrl: "https://ollama.com",
-  },
-  {
-    label: "Custom / Other",
-    url: "",
-    chatModel: "",
-    embedModel: "",
-    keyHint: "API key",
-    docsUrl: "",
-  },
-];
+const PROVIDERS = AI_PROVIDERS;
 
 function StepAI({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) {
   const t = useT();
@@ -460,9 +421,9 @@ export function Onboarding() {
   }, [step]);
 
   const goLocalMode = () => {
+    useAuthStore.getState().setLocalMode(true);
     setAuthenticated("local");
-    setLogin("local");
-    setStep(2); // skip GitHub step, go straight to AI
+    // App.tsx will immediately render <Layout /> once isAuthenticated becomes true.
   };
 
   const handleDone = () => {

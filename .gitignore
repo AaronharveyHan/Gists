@@ -11,3 +11,11 @@ src-tauri/WixTools/
 .vscode/settings.json
 .idea/
 *.swp
+
+# Tauri-generated permission schemas
+src-tauri/gen/
+
+# Raycast extension build artifacts
+extensions/raycast/node_modules/
+extensions/raycast/dist/
+extensions/raycast/.raycast-swift-build/

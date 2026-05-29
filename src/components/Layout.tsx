@@ -18,6 +18,8 @@ import type { Template } from "../api/tauri";
 import { useKeyboard } from "../hooks/useKeyboard";
 import { useAutoSync } from "../hooks/useAutoSync";
 import { useThemeStore } from "../store/useThemeStore";
+import { useUpdateCheck } from "../hooks/useUpdateCheck";
+import { useT } from "../store/useI18nStore";
 import { listen } from "@tauri-apps/api/event";
 import { notify } from "../store/useNotificationStore";
 
@@ -25,10 +27,13 @@ const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 600;
 
 export function Layout() {
+  const t = useT();
   const {
     loadGists, sync, selectGist, setNetworkOnline,
     createGist, createLocalGist, networkOnline,
   } = useGistStore();
+  const update = useUpdateCheck();
+  const [updateDismissed, setUpdateDismissed] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showStats, setShowStats] = useState(false);
@@ -42,7 +47,9 @@ export function Layout() {
   const dragging = useRef(false);
 
   useEffect(() => {
-    loadGists().then(() => sync());
+    loadGists().then(() => {
+      if (useGistStore.getState().githubLogin !== "local") sync();
+    });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for gist-open requests from the quick-search window.
@@ -133,6 +140,23 @@ export function Layout() {
           onTemplates={() => setShowTemplates(true)}
           onGraph={() => setShowGraph(true)}
         />
+      )}
+      {update && !updateDismissed && (
+        <div className="update-banner">
+          <span>{t.common.updateAvailable(update.version)}</span>
+          <div className="update-banner__actions">
+            <button className="update-banner__install" onClick={update.install}>
+              {t.common.installAndRestart}
+            </button>
+            <button
+              className="update-banner__dismiss"
+              onClick={() => setUpdateDismissed(true)}
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        </div>
       )}
       <div className="layout__body">
         {!zenMode && (

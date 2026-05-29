@@ -7,65 +7,36 @@ mod commands;
 use gists_client::db;
 use commands::AppState;
 use tauri::{
-    CustomMenuItem, GlobalShortcutManager, Manager, SystemTray, SystemTrayEvent,
-    SystemTrayMenu, SystemTrayMenuItem,
+    menu::{Menu, MenuItem, PredefinedMenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::Mutex;
 
 fn main() {
-    let tray_menu = SystemTrayMenu::new()
-        .add_item(CustomMenuItem::new("show", "Show Gists Client"))
-        .add_item(CustomMenuItem::new("search", "Quick Search  (Alt+Space)"))
-        .add_native_item(SystemTrayMenuItem::Separator)
-        .add_item(CustomMenuItem::new("quit", "Quit"));
-
-    let system_tray = SystemTray::new().with_menu(tray_menu);
-
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(AppState {
             token: Mutex::new(None),
         })
-        .system_tray(system_tray)
-        .on_system_tray_event(|app, event| match event {
-            SystemTrayEvent::LeftClick { .. } => {
-                let window = app.get_window("main").unwrap();
-                if window.is_visible().unwrap_or(false) {
-                    window.hide().unwrap();
-                } else {
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
-                }
-            }
-            SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-                "show" => {
-                    let window = app.get_window("main").unwrap();
-                    window.show().unwrap();
-                    window.set_focus().unwrap();
-                }
-                "search" => {
-                    if let Some(w) = app.get_window("quick-search") {
-                        w.center().unwrap();
-                        w.show().unwrap();
-                        w.set_focus().unwrap();
-                    }
-                }
-                "quit" => std::process::exit(0),
-                _ => {}
-            },
-            _ => {}
-        })
-        .on_window_event(|event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
-                if event.window().label() == "main" {
-                    // Hide to tray instead of quitting.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
                     api.prevent_close();
-                    event.window().hide().unwrap();
+                    let _ = window.hide();
                 }
             }
         })
         .setup(|app| {
             let app_dir = app
-                .path_resolver()
+                .path()
                 .app_data_dir()
                 .expect("Failed to resolve app data directory");
 
@@ -84,19 +55,64 @@ fn main() {
                 });
             }
 
+            // System tray menu
+            let show_item = MenuItem::with_id(app, "show", "Show Gists Client", true, None::<&str>)?;
+            let search_item = MenuItem::with_id(app, "search", "Quick Search  (Alt+Space)", true, None::<&str>)?;
+            let sep = PredefinedMenuItem::separator(app)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_item, &search_item, &sep, &quit_item])?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(app.default_window_icon().unwrap().clone())
+                .menu(&menu)
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "search" => {
+                        if let Some(w) = app.get_webview_window("quick-search") {
+                            let _ = w.center();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "quit" => std::process::exit(0),
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            if window.is_visible().unwrap_or(false) {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
             // Build the quick-search floating window.
-            // Dev: point at Vite dev server with query param.
-            // Prod: load from dist with query param via custom-protocol.
             #[cfg(debug_assertions)]
-            let search_url = tauri::WindowUrl::External(
+            let search_url = WebviewUrl::External(
                 "http://localhost:1420/?window=quick-search"
                     .parse()
                     .unwrap(),
             );
             #[cfg(not(debug_assertions))]
-            let search_url = tauri::WindowUrl::App("index.html?window=quick-search".into());
+            let search_url = WebviewUrl::App("index.html?window=quick-search".into());
 
-            tauri::WindowBuilder::new(app, "quick-search", search_url)
+            WebviewWindowBuilder::new(app, "quick-search", search_url)
                 .title("Quick Search")
                 .inner_size(620.0, 520.0)
                 .resizable(false)
@@ -107,34 +123,36 @@ fn main() {
                 .center()
                 .build()?;
 
-            // Alt+Space — toggle window in Search mode (default).
-            let handle = app.handle();
-            app.global_shortcut_manager()
-                .register("Alt+Space", move || {
-                    if let Some(w) = handle.get_window("quick-search") {
+            // Alt+Space — toggle quick-search window.
+            let handle = app.handle().clone();
+            app.global_shortcut().on_shortcut("Alt+Space", move |_app, _shortcut, event| {
+                if event.state() == ShortcutState::Pressed {
+                    if let Some(w) = handle.get_webview_window("quick-search") {
                         if w.is_visible().unwrap_or(false) {
-                            w.hide().unwrap();
+                            let _ = w.hide();
                         } else {
-                            w.center().unwrap();
-                            w.show().unwrap();
-                            w.set_focus().unwrap();
+                            let _ = w.center();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                }
+            })?;
+
+            // Alt+Shift+Space — open directly in Capture mode.
+            let handle2 = app.handle().clone();
+            app.global_shortcut()
+                .on_shortcut("Alt+Shift+Space", move |_app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        if let Some(w) = handle2.get_webview_window("quick-search") {
+                            let _ = w.center();
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let _ = w.emit("switch-to-capture", ());
                         }
                     }
                 })
-                .expect("Failed to register Alt+Space global shortcut");
-
-            // Alt+Shift+Space — open directly in Capture mode.
-            let handle2 = app.handle();
-            app.global_shortcut_manager()
-                .register("Alt+Shift+Space", move || {
-                    if let Some(w) = handle2.get_window("quick-search") {
-                        w.center().unwrap();
-                        w.show().unwrap();
-                        w.set_focus().unwrap();
-                        let _ = w.emit("switch-to-capture", ());
-                    }
-                })
-                .ok(); // best-effort; some OSes may not support this combo
+                .ok();
 
             Ok(())
         })
@@ -183,6 +201,9 @@ fn main() {
             commands::update_template,
             commands::delete_template,
             commands::save_gist_as_template,
+            commands::vscode_snippets_default_path,
+            commands::vscode_snippets_preview,
+            commands::vscode_snippets_import,
             commands::run_code,
             commands::kill_run,
             commands::list_gist_tag_pairs,

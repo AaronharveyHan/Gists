@@ -1,86 +1,15 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/schema.json",
+  "productName": "gists-client",
+  "version": "0.2.0",
+  "identifier": "com.gists-client.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
-    "devPath": "http://localhost:1420",
-    "distDir": "../dist"
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
   },
-  "package": {
-    "productName": "gists-client",
-    "version": "0.2.0"
-  },
-  "tauri": {
-    "systemTray": {
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": true,
-      "menuOnLeftClick": false
-    },
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true
-      },
-      "dialog": {
-        "all": false,
-        "open": true,
-        "save": true,
-        "confirm": true
-      },
-      "globalShortcut": {
-        "all": true
-      },
-      "clipboard": {
-        "all": false,
-        "writeText": true
-      },
-      "window": {
-        "all": false,
-        "hide": true,
-        "show": true,
-        "setFocus": true,
-        "center": true,
-        "startDragging": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "category": "DeveloperTool",
-      "copyright": "",
-      "deb": { "depends": [] },
-      "externalBin": [],
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ],
-      "identifier": "com.gists-client.app",
-      "longDescription": "A lightweight GitHub Gist desktop client",
-      "macOS": {
-        "entitlements": null,
-        "exceptionDomain": "",
-        "frameworks": [],
-        "providerShortName": null,
-        "signingIdentity": null
-      },
-      "resources": [],
-      "shortDescription": "GitHub Gist Client",
-      "targets": "all",
-      "windows": {
-        "certificateThumbprint": null,
-        "digestAlgorithm": "sha256",
-        "timestampUrl": ""
-      }
-    },
-    "security": {
-      "csp": null
-    },
-    "updater": {
-      "active": false
-    },
+  "app": {
     "windows": [
       {
         "fullscreen": false,
@@ -93,6 +22,48 @@
         "decorations": true,
         "transparent": false
       }
-    ]
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "DeveloperTool",
+    "copyright": "",
+    "externalBin": [],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "longDescription": "A lightweight GitHub Gist desktop client",
+    "linux": {
+      "deb": { "depends": [] }
+    },
+    "macOS": {
+      "entitlements": null,
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null
+    },
+    "resources": [],
+    "shortDescription": "GitHub Gist Client",
+    "targets": "all",
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": ""
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEwOEE5NEM2RTYyQkUyMkMKUldRczRpdm14cFNLRU1lbTdSTThqWW8yWStUbG5TRHh6Q3UrSExDYy92UDR0dEJIaFFDUVg0VmoK",
+      "endpoints": [
+        "https://github.com/AaronharveyHan/gists_client/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

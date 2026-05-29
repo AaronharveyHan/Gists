@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { writeText } from "@tauri-apps/api/clipboard";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useGistStore } from "../store/useGistStore";
 import { notify } from "../store/useNotificationStore";
 import * as api from "../api/tauri";

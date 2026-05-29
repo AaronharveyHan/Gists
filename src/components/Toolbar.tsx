@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useGistStore } from "../store/useGistStore";
+import { useAuthStore } from "../store/useAuthStore";
 import { useKeyboard } from "../hooks/useKeyboard";
 import { clearToken, exportGists } from "../api/tauri";
 import { notify } from "../store/useNotificationStore";
@@ -16,13 +17,15 @@ export function Toolbar({
   const { githubLogin, logout, sync, syncStatus, syncError, lastSyncResult } =
     useGistStore();
 
+  const isLocalMode = githubLogin === "local";
+
   const doSync = useCallback(() => sync(false), [sync]);
-  useKeyboard("r", "meta", doSync);
+  useKeyboard("r", "meta", isLocalMode ? () => {} : doSync);
 
   const [exporting, setExporting] = useState(false);
 
   const handleExport = async () => {
-    const { save } = await import("@tauri-apps/api/dialog");
+    const { save } = await import("@tauri-apps/plugin-dialog");
     const dest = await save({
       title: t.toolbar.exportDialogTitle,
       defaultPath: "gists-backup.json",
@@ -41,7 +44,7 @@ export function Toolbar({
   };
 
   const handleImport = async () => {
-    const { open } = await import("@tauri-apps/api/dialog");
+    const { open } = await import("@tauri-apps/plugin-dialog");
     const file = await open({
       title: t.toolbar.importDialogTitle,
       multiple: false,
@@ -55,6 +58,12 @@ export function Toolbar({
     if (!confirm(t.toolbar.disconnectConfirm)) return;
     await clearToken();
     logout();
+  };
+
+  const handleConnectGitHub = () => {
+    useAuthStore.getState().setLocalMode(false);
+    logout();
+    // isAuthenticated becomes false → App renders <Onboarding />
   };
 
   const syncLabel = () => {
@@ -72,27 +81,31 @@ export function Toolbar({
     <header className="toolbar">
       <span className="toolbar__title">{t.toolbar.title}</span>
       <div className="toolbar__actions">
-        {syncStatus === "error" && syncError && (
+        {!isLocalMode && syncStatus === "error" && syncError && (
           <span className="toolbar__sync-error" title={syncError}>
             {syncError.slice(0, 40)}
           </span>
         )}
-        <button
-          className={`toolbar__sync ${syncStatus === "syncing" ? "toolbar__sync--active" : ""} ${syncStatus === "error" ? "toolbar__sync--error" : ""}`}
-          onClick={doSync}
-          disabled={syncStatus === "syncing"}
-          title={t.toolbar.incrementalTitle}
-        >
-          {syncLabel()}
-        </button>
-        <button
-          className="toolbar__full-sync"
-          onClick={() => sync(true)}
-          disabled={syncStatus === "syncing"}
-          title={t.toolbar.fullTitle}
-        >
-          {t.toolbar.full}
-        </button>
+        {!isLocalMode && (
+          <>
+            <button
+              className={`toolbar__sync ${syncStatus === "syncing" ? "toolbar__sync--active" : ""} ${syncStatus === "error" ? "toolbar__sync--error" : ""}`}
+              onClick={doSync}
+              disabled={syncStatus === "syncing"}
+              title={t.toolbar.incrementalTitle}
+            >
+              {syncLabel()}
+            </button>
+            <button
+              className="toolbar__full-sync"
+              onClick={() => sync(true)}
+              disabled={syncStatus === "syncing"}
+              title={t.toolbar.fullTitle}
+            >
+              {t.toolbar.full}
+            </button>
+          </>
+        )}
         <button className="toolbar__palette" onClick={onPalette} title={t.toolbar.searchTitle}>
           {t.toolbar.search}
         </button>
@@ -120,16 +133,28 @@ export function Toolbar({
         <button className="toolbar__export" onClick={onGraph} title={t.toolbar.graphTitle}>
           {t.toolbar.graph}
         </button>
-        <span className="toolbar__user">@{githubLogin}</span>
+        {isLocalMode ? (
+          <span className="toolbar__user toolbar__user--local" title={t.toolbar.localModeTitle}>
+            {t.toolbar.localMode}
+          </span>
+        ) : (
+          <span className="toolbar__user">@{githubLogin}</span>
+        )}
         <button className="toolbar__export" onClick={onShortcuts} title={t.toolbar.shortcutsTitle}>
           ?
         </button>
         <button className="toolbar__settings" onClick={onSettings} title={t.toolbar.settings}>
           {t.toolbar.settings}
         </button>
-        <button className="toolbar__logout" onClick={handleLogout}>
-          {t.toolbar.logout}
-        </button>
+        {isLocalMode ? (
+          <button className="toolbar__logout" onClick={handleConnectGitHub}>
+            {t.toolbar.connectGitHub}
+          </button>
+        ) : (
+          <button className="toolbar__logout" onClick={handleLogout}>
+            {t.toolbar.logout}
+          </button>
+        )}
       </div>
     </header>
   );

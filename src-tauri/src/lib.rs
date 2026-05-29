@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod cache;
 pub mod classifier;
 pub mod db;
@@ -8,3 +9,4 @@ pub mod models;
 pub mod runner;
 pub mod search_parser;
 pub mod templates;
+pub mod vscode_snippets;

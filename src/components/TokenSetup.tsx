@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { setToken } from "../api/tauri";
 import { useGistStore } from "../store/useGistStore";
-import { open } from "@tauri-apps/api/shell";
+import { open } from "@tauri-apps/plugin-shell";
 
 export function TokenSetup() {
   const [value, setValue] = useState("");

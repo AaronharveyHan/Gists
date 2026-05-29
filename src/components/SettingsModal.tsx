@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { open } from "@tauri-apps/plugin-shell";
 import { useThemeStore, PRESETS } from "../store/useThemeStore";
 import { getAiConfig, saveAiConfig } from "../api/tauri";
 import { useT, useI18nStore } from "../store/useI18nStore";
+import { AI_PROVIDERS, detectProvider } from "../data/aiProviders";
 
 const DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 
@@ -35,6 +37,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [aiApiKey, setAiApiKey] = useState("");
   const [aiModel, setAiModel] = useState("qwen-turbo");
   const [aiEmbeddingModel, setAiEmbeddingModel] = useState("text-embedding-v3");
+  const [aiProviderId, setAiProviderId] = useState<string>(AI_PROVIDERS[0].id);
   const [aiHasKey, setAiHasKey] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
@@ -45,8 +48,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       setAiModel(cfg.model);
       setAiEmbeddingModel(cfg.embedding_model);
       setAiHasKey(cfg.has_key);
+      setAiProviderId(detectProvider(cfg.base_url).id);
     }).catch(() => {/* ignore if not configured yet */});
   }, []);
+
+  const handleProviderPick = (id: string) => {
+    const p = AI_PROVIDERS.find((x) => x.id === id);
+    if (!p) return;
+    setAiProviderId(id);
+    if (p.url) setAiBaseUrl(p.url);
+    if (p.chatModel) setAiModel(p.chatModel);
+    if (p.embedModel) setAiEmbeddingModel(p.embedModel);
+  };
+
+  const currentProvider = AI_PROVIDERS.find((p) => p.id === aiProviderId) ?? AI_PROVIDERS[0];
 
   const handleSaveAi = async () => {
     setAiSaving(true);
@@ -246,6 +261,36 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
         {/* ── AI Integration ─────────────────────────────────────── */}
         <section className="settings-section">
           <div className="settings-section__title">{t.settings.aiSection}</div>
+
+          {/* Provider preset grid — picking one fills URL + chat model + embed model */}
+          <div className="settings-row settings-row--col">
+            <label className="settings-label">{t.settings.aiProviderPreset}</label>
+            <div className="ai-preset-grid">
+              {AI_PROVIDERS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`ai-preset-card${aiProviderId === p.id ? " ai-preset-card--active" : ""}`}
+                  onClick={() => handleProviderPick(p.id)}
+                  title={p.tagline}
+                >
+                  <div className="ai-preset-card__label">{p.label}</div>
+                  <div className="ai-preset-card__tagline">{p.tagline}</div>
+                </button>
+              ))}
+            </div>
+            {currentProvider.docsUrl && (
+              <button
+                type="button"
+                className="settings-link"
+                onClick={() => open(currentProvider.docsUrl)}
+                style={{ alignSelf: "flex-start", marginTop: 4 }}
+              >
+                ↗ {t.settings.getApiKeyFrom(currentProvider.label)}
+              </button>
+            )}
+          </div>
+
           <div className="settings-row settings-row--col">
             <label className="settings-label">{t.settings.providerUrl}</label>
             <input
@@ -255,29 +300,6 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setAiBaseUrl(e.target.value)}
               placeholder={DASHSCOPE_URL}
             />
-            <div className="settings-hint-row">
-              <button
-                type="button"
-                className="settings-link"
-                onClick={() => setAiBaseUrl(DASHSCOPE_URL)}
-              >
-                DashScope (Aliyun)
-              </button>
-              <button
-                type="button"
-                className="settings-link"
-                onClick={() => setAiBaseUrl("https://api.openai.com/v1")}
-              >
-                OpenAI
-              </button>
-              <button
-                type="button"
-                className="settings-link"
-                onClick={() => setAiBaseUrl("https://api.groq.com/openai/v1")}
-              >
-                Groq
-              </button>
-            </div>
           </div>
           <div className="settings-row settings-row--col">
             <label className="settings-label">

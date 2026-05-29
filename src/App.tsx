@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getToken, getCurrentLogin } from "./api/tauri";
 import { useGistStore } from "./store/useGistStore";
+import { useAuthStore } from "./store/useAuthStore";
 import { Onboarding } from "./components/Onboarding";
 import { Layout } from "./components/Layout";
 import "./styles/global.css";
@@ -9,16 +10,20 @@ export default function App() {
   const { isAuthenticated, setAuthenticated } = useGistStore();
   const [checking, setChecking] = useState(true);
 
-  // On startup: check if a token is already saved in the DB, then resolve login.
-  // get_current_login: reads cached gh_login from DB; if absent, calls GitHub
-  // API once and caches it — handles tokens saved before gh_login caching.
   useEffect(() => {
+    // Local mode persists across restarts — restore it immediately.
+    if (useAuthStore.getState().localMode) {
+      setAuthenticated("local");
+      setChecking(false);
+      return;
+    }
+    // GitHub mode: verify token is still in keychain and resolve login.
     getToken()
       .then((hasToken) => {
         if (hasToken) {
           return getCurrentLogin()
             .then((login) => { if (login.trim()) setAuthenticated(login); })
-            .catch(() => { /* token exists but login fetch failed — stay on TokenSetup */ });
+            .catch(() => {});
         }
       })
       .finally(() => setChecking(false));

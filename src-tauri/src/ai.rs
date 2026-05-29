@@ -1,5 +1,6 @@
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiMessage {

@@ -1,0 +1,23 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for Gists Client",
+  "windows": ["main", "quick-search"],
+  "permissions": [
+    "core:default",
+    "shell:allow-open",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-ask",
+    "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-text",
+    "fs:allow-write-text-file",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:allow-restart",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-focus",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-center"
+  ]
+}

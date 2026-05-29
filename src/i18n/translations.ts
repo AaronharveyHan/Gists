@@ -34,6 +34,8 @@ const en = {
     search: "Search",
     loading: "Loading…",
     use: "Use",
+    updateAvailable: (v: string) => `New version ${v} available`,
+    installAndRestart: "Install & Restart",
   },
 
   toolbar: {
@@ -67,6 +69,9 @@ const en = {
     settings: "Settings",
     logout: "Logout",
     disconnectConfirm: "Disconnect your GitHub account?",
+    localMode: "Local",
+    localModeTitle: "Local mode — no GitHub sync",
+    connectGitHub: "Connect GitHub",
   },
 
   sidebar: {
@@ -227,6 +232,8 @@ const en = {
     vimMode: "Vim keybindings",
     zenMode: "Zen mode (hide sidebar & toolbar)",
     aiSection: "AI Integration",
+    aiProviderPreset: "Pick a provider (auto-fills URL & models)",
+    getApiKeyFrom: (name: string) => `Get an API key from ${name}`,
     providerUrl: "Provider Base URL",
     apiKey: "API Key",
     keySaved: "Saved",
@@ -409,6 +416,8 @@ export const zh: Translations = {
     search: "搜索",
     loading: "加载中…",
     use: "使用",
+    updateAvailable: (v: string) => `新版本 ${v} 可用`,
+    installAndRestart: "安装并重启",
   },
 
   toolbar: {
@@ -442,6 +451,9 @@ export const zh: Translations = {
     settings: "设置",
     logout: "退出登录",
     disconnectConfirm: "确认断开 GitHub 账号连接？",
+    localMode: "本地模式",
+    localModeTitle: "本地模式 — 未连接 GitHub，不进行同步",
+    connectGitHub: "连接 GitHub",
   },
 
   sidebar: {
@@ -602,6 +614,8 @@ export const zh: Translations = {
     vimMode: "Vim 键位绑定",
     zenMode: "禅模式（隐藏侧边栏和工具栏）",
     aiSection: "AI 集成",
+    aiProviderPreset: "选择服务商（自动填充 URL 与模型）",
+    getApiKeyFrom: (name: string) => `前往 ${name} 申请密钥`,
     providerUrl: "服务商 Base URL",
     apiKey: "API 密钥",
     keySaved: "已保存",

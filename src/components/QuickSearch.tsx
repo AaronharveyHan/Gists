@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/tauri";
-import { readText, writeText } from "@tauri-apps/api/clipboard";
+import { invoke } from "@tauri-apps/api/core";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { emit, listen } from "@tauri-apps/api/event";
-import { appWindow, WebviewWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Gist } from "../api/tauri";
 
 // ── Language helpers ──────────────────────────────────────────────────────────
@@ -82,7 +83,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
 
   // Focus + reset on window focus
   useEffect(() => {
-    const unlisten = appWindow.listen("tauri://focus", () => {
+    const unlisten = getCurrentWindow().listen("tauri://focus", () => {
       setQuery(""); setSelected(0); setFeedback(null);
       setTimeout(() => inputRef.current?.focus(), 50);
     });
@@ -104,7 +105,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
     return () => clearTimeout(t);
   }, [query]);
 
-  const hide = useCallback(() => appWindow.hide(), []);
+  const hide = useCallback(() => getCurrentWindow().hide(), []);
 
   const handleCopy = useCallback(async (g: Gist) => {
     const f = g.files[0];
@@ -116,7 +117,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
 
   const handleOpen = useCallback(async (g: Gist) => {
     await emit("open-gist", { id: g.id });
-    const main = WebviewWindow.getByLabel("main");
+    const main = await WebviewWindow.getByLabel("main");
     await main?.show(); await main?.setFocus();
     setFeedback("opened");
     setTimeout(hide, 400);
@@ -236,7 +237,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
   }, [readClipboard]);
 
   useEffect(() => {
-    const unlisten = appWindow.listen("tauri://focus", readClipboard);
+    const unlisten = getCurrentWindow().listen("tauri://focus", readClipboard);
     return () => { unlisten.then((f) => f()); };
   }, [readClipboard]);
 
@@ -264,10 +265,10 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
       setSaved(true);
       if (openAfter) {
         await emit("open-gist", { id: gist.id });
-        const main = WebviewWindow.getByLabel("main");
+        const main = await WebviewWindow.getByLabel("main");
         await main?.show(); await main?.setFocus();
       }
-      setTimeout(() => { setSaved(false); appWindow.hide(); }, openAfter ? 300 : 1000);
+      setTimeout(() => { setSaved(false); getCurrentWindow().hide(); }, openAfter ? 300 : 1000);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -276,7 +277,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") { appWindow.hide(); return; }
+    if (e.key === "Escape") { getCurrentWindow().hide(); return; }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "Enter") { handleSave(true); return; }
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { handleSave(false); return; }
     if (e.key === "Tab" && e.shiftKey) { e.preventDefault(); onSwitchSearch(); }
@@ -387,8 +388,8 @@ export function QuickSearch() {
 
   // Reset to search mode each time the window is hidden (so next Alt+Space opens search).
   useEffect(() => {
-    const unlisten = appWindow.listen("tauri://blur", () => {
-      appWindow.hide();
+    const unlisten = getCurrentWindow().listen("tauri://blur", () => {
+      getCurrentWindow().hide();
       // Small delay so the next open starts fresh in search mode.
       setTimeout(() => setMode("search"), 200);
     });

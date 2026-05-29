@@ -3,7 +3,7 @@
  * Centralises all invoke() calls so the rest of the app never
  * imports @tauri-apps/api directly.
  */
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 
 export interface GistFile {
   filename: string;
@@ -445,6 +445,27 @@ export const deleteTemplate = (id: number): Promise<void> =>
 
 export const saveGistAsTemplate = (gistId: string, name: string): Promise<Template> =>
   invoke("save_gist_as_template", { gistId, name });
+
+// ── VS Code snippets import ───────────────────────────────────────────────────
+
+export interface VscodeSnippet {
+  name: string;
+  description: string;
+  prefix: string;
+  language: string;
+  filename: string;
+  body: string;
+  source: string;
+}
+
+export const vscodeSnippetsDefaultPath = (): Promise<string | null> =>
+  invoke("vscode_snippets_default_path");
+
+export const vscodeSnippetsPreview = (path: string | null): Promise<VscodeSnippet[]> =>
+  invoke("vscode_snippets_preview", { path });
+
+export const vscodeSnippetsImport = (items: VscodeSnippet[]): Promise<number> =>
+  invoke("vscode_snippets_import", { items });
 
 // ── Local draft / offline-first ───────────────────────────────────────────────
 

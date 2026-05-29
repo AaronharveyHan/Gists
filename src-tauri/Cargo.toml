@@ -1,31 +1,28 @@
 [package]
 name = "gists-client"
 version = "0.2.0"
+# The package has two binaries (the Tauri app + the `gist` CLI), so plain
+# `cargo run` / `tauri dev` needs to know which one is the default.
+default-run = "gists-client"
 description = "A lightweight GitHub Gist desktop client"
 authors = []
 license = ""
 repository = ""
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.77"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = [
-  "shell-open",
-  "dialog-open",
-  "dialog-save",
-  "dialog-confirm",
-  "global-shortcut-all",
-  "system-tray",
-  "clipboard-write-text",
-  "window-hide",
-  "window-show",
-  "window-set-focus",
-  "window-center",
-  "window-start-dragging",
-] }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -37,6 +34,16 @@ once_cell = "1"
 similar = { version = "2", features = ["text"] }
 futures = "0.3"
 keyring = { version = "2", features = ["linux-default-keyutils"] }
+dirs = "5"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+# Enables the `gist` command-line binary. Off by default so `cargo tauri build`
+# (the desktop bundle) doesn't compile it.
+cli = []
+
+# Command-line companion. Build with: cargo build --release --features cli --bin gist
+[[bin]]
+name = "gist"
+path = "src/bin/gist.rs"
+required-features = ["cli"]

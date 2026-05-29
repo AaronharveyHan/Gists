@@ -131,7 +131,7 @@ export function BulkActionBar({
   };
 
   const handleExport = async () => {
-    const { save } = await import("@tauri-apps/api/dialog");
+    const { save } = await import("@tauri-apps/plugin-dialog");
     const dest = await save({
       title: "Export selected gists",
       defaultPath: `gists-selection-${count}.json`,
@@ -140,7 +140,7 @@ export function BulkActionBar({
     if (!dest) return;
     setBusy(true);
     try {
-      const { writeTextFile } = await import("@tauri-apps/api/fs");
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       await writeTextFile(dest, JSON.stringify(selectedGists, null, 2));
       notify(`Exported ${count} gist${count !== 1 ? "s" : ""}`, "success");
     } catch (e) {

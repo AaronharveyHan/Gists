@@ -1,0 +1,51 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "gists-client",
+  "title": "Gists Client",
+  "description": "Search, open and create GitHub gists from your local Gists Client database.",
+  "icon": "command-icon.png",
+  "author": "aaronharveyhan",
+  "categories": ["Developer Tools"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "search-gists",
+      "title": "Search Gists",
+      "description": "Full-text search your gists and open / copy them",
+      "mode": "view"
+    },
+    {
+      "name": "create-gist",
+      "title": "Create Gist from Clipboard",
+      "description": "Create a new gist from the current clipboard contents",
+      "mode": "no-view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "gistPath",
+      "title": "gist CLI path",
+      "description": "Absolute path to the gist binary (leave blank to auto-detect)",
+      "type": "textfield",
+      "required": false,
+      "default": "/usr/local/bin/gist"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.83.0"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^1.0.11",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.4.0"
+  },
+  "scripts": {
+    "build": "ray build -e dist",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix"
+  }
+}

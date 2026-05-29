@@ -827,7 +827,7 @@ export function Editor() {
             href={gist.html_url}
             onClick={(e) => {
               e.preventDefault();
-              import("@tauri-apps/api/shell").then(({ open }) =>
+              import("@tauri-apps/plugin-shell").then(({ open }) =>
                 open(gist.html_url)
               );
             }}
@@ -1119,6 +1119,7 @@ export function NewGistModal({
   template?: Template;
 }) {
   const t = useT();
+  const isLocalMode = useGistStore((s) => s.githubLogin === "local");
   const [desc, setDesc] = useState(template?.description ?? "");
   const [filename, setFilename] = useState(
     template?.files[0]?.filename ?? `${t.editor.untitled}.md`
@@ -1252,21 +1253,23 @@ export function NewGistModal({
             </button>
             <button
               type="button"
-              className="btn"
+              className={`btn${isLocalMode ? " btn--primary" : ""}`}
               onClick={handleSaveDraft}
               disabled={loading || (!template && (!filename.trim() || !content.trim()))}
               title={t.editor.saveLocallyTitle}
             >
               {t.editor.saveDraft}
             </button>
-            <button
-              type="submit"
-              className="btn btn--primary"
-              disabled={loading || !networkOnline || (!template && (!filename.trim() || !content.trim()))}
-              title={networkOnline ? t.editor.createOnGitHubTitle : t.editor.offlineUseDraft}
-            >
-              {loading ? t.editor.creating : t.editor.createOnGitHub}
-            </button>
+            {!isLocalMode && (
+              <button
+                type="submit"
+                className="btn btn--primary"
+                disabled={loading || !networkOnline || (!template && (!filename.trim() || !content.trim()))}
+                title={networkOnline ? t.editor.createOnGitHubTitle : t.editor.offlineUseDraft}
+              >
+                {loading ? t.editor.creating : t.editor.createOnGitHub}
+              </button>
+            )}
           </div>
         </form>
       </div>

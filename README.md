@@ -51,6 +51,7 @@
   - [分享与嵌入](#分享与嵌入)
   - [命令面板](#命令面板)
   - [全局快速搜索](#全局快速搜索)
+  - [命令行工具 gist](#命令行工具-gist)
   - [系统托盘](#系统托盘)
   - [统计面板](#统计面板)
   - [导出与导入](#导出与导入)
@@ -62,11 +63,27 @@
 
 ## 快速开始
 
+### 直接下载（推荐）
+
+前往 [Releases 页面](https://github.com/AaronharveyHan/gists_client/releases/latest) 下载对应平台的安装包：
+
+| 平台 | 文件 |
+|------|------|
+| macOS | `.dmg` |
+| Windows | `.msi`（推荐）或 `.exe` |
+| Linux | `.AppImage`（推荐，免安装）或 `.deb` |
+
+> **macOS**：首次打开若提示"无法验证开发者"，右键 → 打开 即可。  
+> **Windows**：SmartScreen 警告点"仍要运行"即可。  
+> **Linux**：`.AppImage` 下载后 `chmod +x *.AppImage` 即可运行；`.deb` 适用于 Debian / Ubuntu。
+
+### 从源码构建
+
 ### 前置要求
 
-- [Rust 1.70+](https://rustup.rs/)
+- [Rust 1.77+](https://rustup.rs/)
 - [Node.js 18+](https://nodejs.org/)
-- [Tauri v1 系统依赖](https://tauri.app/v1/guides/getting-started/prerequisites)（WebKitGTK / libsoup 等）
+- [Tauri v2 系统依赖](https://v2.tauri.app/start/prerequisites/)（macOS / Windows 通常无需额外安装；Linux 需 WebKitGTK 4.1 / libsoup-3 等）
 
 ### 安装 & 运行
 
@@ -101,6 +118,7 @@ npm run tauri build
 | **标签 / 分类** | 自定义彩色标签 · 启发式 10 类自动分类 |
 | **批量操作** | 多选 · 批量打标签 · 批量删除 · 批量导出 |
 | **全局搜索** | `Alt+Space` 浮动搜索窗口 · 系统托盘常驻 |
+| **命令行工具** | `gist save foo.py` · `list` · `search` · `view` · 与桌面端共享同一数据库 |
 | **统计** | 语言 / 分类 / 标签 / 月度活动可视化 |
 | **主题** | 跟随系统深浅色 · 多套 Monaco 主题 · Vim 模式 · 专注模式 |
 
@@ -164,6 +182,20 @@ npm run tauri build
 4. 验证通过后自动开始首次全量同步。
 
 > Token 格式：必须以 `ghp_` / `ghu_` / `gho_` / `ghs_` / `github_pat_` 开头，长度 ≥ 20。
+
+#### 关于系统钥匙串授权（重要）
+
+**首次保存 Token 时，macOS 会弹出系统对话框：「gists-client 想使用您存储在钥匙串『github_token』中的机密信息」**——这是正常行为，请点击 **始终允许**，之后不会再次询问。Windows 用 Credential Manager、Linux 用 Secret Service，机制相同但通常无需手动确认。
+
+| 项目 | 说明 |
+|------|------|
+| **为什么需要？** | 用系统钥匙串加密存储你的 GitHub Token（macOS Keychain / Windows Credential Manager / Linux keyutils），避免明文落盘 |
+| **存了什么？** | 仅一个键值对：`com.gists-client.app` → `github_token` = 你的 PAT |
+| **谁能读到？** | 只有 gists-client 本身。其他应用要读取需要单独获得系统授权 |
+| **拒绝授权会怎样？** | 应用静默降级，把 token 存到本地 SQLite（明文）。功能不受影响，但安全性较低 |
+| **如何撤销？** | macOS：钥匙串访问.app → 搜索 `com.gists-client.app` 删除即可 |
+
+> 纯本地模式（首屏「跳过登录」）不会触发任何钥匙串请求——完全离线使用。
 
 ---
 
@@ -535,6 +567,79 @@ npm run tauri build
 
 ---
 
+### 命令行工具 gist
+
+为「在终端里写代码」的人准备的命令行入口。`gist` 与桌面端**共享同一个 SQLite 数据库和系统钥匙串**——终端保存的片段会立刻出现在 App 里，反之亦然。
+
+#### 构建与安装
+
+```bash
+# 在项目根目录
+cargo build --release --features cli --bin gist
+# 把产物放进 PATH（macOS / Linux 示例）
+cp src-tauri/target/release/gist /usr/local/bin/
+```
+
+> CLI 用 `cli` feature 单独开启，因此 `cargo tauri build`（桌面端打包）不会编译它，桌面包体不受影响。
+
+#### 命令一览
+
+| 命令 | 说明 |
+|------|------|
+| `gist save <file>...` | 从一个或多个文件创建 gist（已登录则推送到 GitHub，否则存为本地草稿） |
+| `gist save -` | 从 stdin 读取内容（`--name` 指定文件名） |
+| `gist list [-n N] [--all]` | 列出最近的 gist（默认 20 条） |
+| `gist search <query>` | 全文搜索（支持 `tag:` `lang:` `is:` 语法） |
+| `gist view <id>` | 把 gist 的文件内容打印到 stdout |
+| `gist open <id>` | 在浏览器打开 gist |
+| `gist whoami` | 显示当前登录的 GitHub 账号 |
+
+**`save` 标志：** `-p/--public`（默认 secret）· `-d/--desc <文本>` · `-l/--local`（仅存本地草稿）· `--name <文件名>`（stdin 用）
+
+#### 示例
+
+```bash
+gist save foo.py                              # 推送一个 secret gist
+gist save foo.py bar.js -p -d "two snippets"  # 多文件 + public + 描述
+cat notes.md | gist save - --name notes.md    # 从管道保存
+gist list -n 5
+gist search "tag:work lang:python"
+gist view 1a2b3c                              # id 支持前缀匹配
+```
+
+> `<id>` 接受前缀匹配——从 `gist list` 复制前几位即可，无需完整 32 位 id。
+
+#### Raycast / Alfred 集成
+
+CLI 的 `--json` 输出（`save` / `list` / `search`）让 macOS 启动器可以直接接入。启动器不直接碰数据库，全部走 `gist` CLI——所以鉴权、token、数据路径都和桌面端完全一致，**读写同一个 SQLite**：
+
+```
+Raycast / Alfred  ──►  gist --json  ──►  同一个 SQLite  ◄──  桌面 App
+```
+
+两个扩展都会自动探测 `gist` 二进制（`/opt/homebrew/bin`、`/usr/local/bin`、`~/.cargo/bin`），也支持手动指定路径。详见 [`extensions/`](extensions/)。
+
+**Raycast**（`extensions/raycast/`，完整 TypeScript 扩展）
+
+| 命令 | 说明 |
+|------|------|
+| **Search Gists** | 边输边搜（支持 `tag:` `lang:` `is:`）；`↵` 浏览器打开 · `⌘C` 复制内容 · `⌘.` 复制 URL |
+| **Create Gist from Clipboard** | 把剪贴板内容存成 gist，成功后复制 URL |
+
+```bash
+cd extensions/raycast
+npm install
+npm run dev      # ray develop —— 立即出现在 Raycast 中
+```
+
+**Alfred**（`extensions/alfred/`，需 Powerpack）
+
+Script Filter 脚本 `gist-search.sh` 调用 `gist ... --json`，再由 `to_alfred.py` 转换成 Alfred item 格式。由于 `.alfredworkflow` 无法以纯文本提交到 git，按 [`extensions/alfred/README.md`](extensions/alfred/) 的分步说明接入工作流即可（约 2 分钟）：`gist <query>` 边输边搜，`↵` 打开、`⌘C` 复制 URL。
+
+> 两个扩展都依赖先构建好 `gist` CLI（见上方「构建与安装」）。未登录时 `Create Gist` 会存为本地草稿。
+
+---
+
 ### 系统托盘
 
 应用最小化时驻留系统托盘，主窗口关闭按钮不退出应用而是隐藏到托盘。
@@ -630,14 +735,22 @@ npm run tauri build
 ### 技术栈
 
 ```
-Tauri 1.5          — 原生桌面框架 (Rust)
+Tauri 2            — 原生桌面框架 (Rust) · 插件化权限模型 · 内置自动更新
+  ├── tauri-plugin-shell           — 外链 / URL 打开
+  ├── tauri-plugin-dialog          — 文件 / 文件夹选择 · 确认对话框
+  ├── tauri-plugin-clipboard-manager — 剪贴板读写
+  ├── tauri-plugin-fs              — 受控文件系统访问
+  ├── tauri-plugin-global-shortcut — 系统级快捷键（Alt+Space）
+  ├── tauri-plugin-updater         — 签名版本检查 + 自动安装
+  └── tauri-plugin-process         — 应用重启（升级后）
 React 18.2         — UI 框架
-Zustand 4.4        — 极简状态管理
+Zustand 4.4        — 极简状态管理（auth / theme / i18n 持久化到 localStorage）
 Monaco Editor 0.44 — VS Code 同款编辑器
 rusqlite 0.31      — SQLite（bundled，零系统依赖）
 reqwest 0.11       — HTTP 客户端（rustls，无 OpenSSL）
 similar 2          — 纯 Rust Myers diff 算法
-keyring 2          — OS 密钥链存储
+keyring 2          — OS 密钥链存储（macOS Keychain / Windows Credential / Linux keyutils）
+dirs 5             — 跨平台标准路径解析（VS Code 配置目录嗅探）
 react-markdown 10  — Markdown 渲染（remark-gfm + mermaid）
 monaco-vim         — Vim 键位适配层
 ```
@@ -687,22 +800,31 @@ gists-client/
 │       ├── DiffModal.tsx            # Working tree diff
 │       ├── TagInput.tsx             # 标签选择器
 │       ├── SettingsModal.tsx        # 设置（主题/字体/Vim/Zen/AI/语言）
-│       └── ImportModal.tsx          # 导入预览
+│       ├── ImportModal.tsx          # 导入预览
+│       └── VscodeSnippetsImportModal.tsx  # 从 VS Code 用户 snippets 批量导入为模板
 │
-├── src-tauri/src/
-│   ├── main.rs                      # Tauri builder、系统托盘、全局快捷键
-│   ├── commands.rs                  # 所有 Tauri IPC 命令（~50 个）
-│   ├── ai.rs                        # AI 流式对话（OpenAI 兼容协议）
-│   ├── runner.rs                    # 代码运行（多语言进程管理）
-│   ├── templates.rs                 # 模板 CRUD
-│   ├── github.rs                    # GitHub REST API 客户端
-│   ├── cache.rs                     # SQLite 缓存层
-│   ├── db.rs                        # DB 初始化 + Schema 迁移
-│   ├── models.rs                    # 共享类型
-│   ├── classifier.rs                # 启发式分类引擎
-│   ├── search_parser.rs             # 搜索语法解析
-│   └── diff.rs                      # unified diff（similar crate）
+├── src-tauri/
+│   ├── capabilities/
+│   │   └── default.json             # Tauri v2 权限清单（shell/dialog/clipboard/fs/...）
+│   ├── tauri.conf.json              # v2 配置（windows / bundle / plugins.updater）
+│   └── src/
+│       ├── main.rs                  # Tauri builder、系统托盘、全局快捷键
+│       ├── bin/gist.rs              # 命令行工具（共享 lib + 同一 SQLite）
+│       ├── auth.rs                  # 共享钥匙串 + app-data 路径（桌面端 & CLI 共用）
+│       ├── commands.rs              # 所有 Tauri IPC 命令（~60 个）
+│       ├── ai.rs                    # AI 流式对话（OpenAI 兼容协议）
+│       ├── runner.rs                # 代码运行（多语言进程管理）
+│       ├── templates.rs             # 模板 CRUD
+│       ├── vscode_snippets.rs       # VS Code snippets 解析 + 导入
+│       ├── github.rs                # GitHub REST API 客户端
+│       ├── cache.rs                 # SQLite 缓存层
+│       ├── db.rs                    # DB 初始化 + Schema 迁移
+│       ├── models.rs                # 共享类型
+│       ├── classifier.rs            # 启发式分类引擎
+│       ├── search_parser.rs         # 搜索语法解析
+│       └── diff.rs                  # unified diff（similar crate）
 │
+├── .github/workflows/release.yml    # Tag 触发，macOS + Windows 并行构建 + 签名
 ├── package.json
 ├── vite.config.ts
 └── tsconfig.json

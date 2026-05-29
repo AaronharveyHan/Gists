@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::Window;
+use tauri::{Emitter, Window};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use std::process::Stdio;

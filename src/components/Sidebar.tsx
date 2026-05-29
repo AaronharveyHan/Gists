@@ -596,7 +596,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         label: t.sidebar.openInBrowser,
         icon: "↗",
         onClick: () =>
-          import("@tauri-apps/api/shell").then(({ open }) => open(g.html_url)),
+          import("@tauri-apps/plugin-shell").then(({ open }) => open(g.html_url)),
       },
       { separator: true },
       {

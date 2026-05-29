@@ -116,7 +116,7 @@ export function ShareModal({
 
   // Open link in external browser (Tauri)
   const openExternal = (url: string) => {
-    import("@tauri-apps/api/shell").then(({ open }) => open(url)).catch(() => {});
+    import("@tauri-apps/plugin-shell").then(({ open }) => open(url)).catch(() => {});
   };
 
   return (

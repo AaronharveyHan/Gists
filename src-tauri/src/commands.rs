@@ -1,7 +1,7 @@
 /// Tauri commands — the IPC bridge between the frontend and Rust backend.
 /// Each command is async and returns a JSON-serializable result.
 use std::collections::HashMap;
-use tauri::State;
+use tauri::{Emitter, State};
 use tokio::sync::Mutex;
 
 pub use crate::ai::AiMessage;
@@ -12,35 +12,13 @@ const AI_DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-v3";
 
 use chrono::Utc;
 
-use gists_client::{cache, db, github, models::*, templates};
+use gists_client::{cache, db, github, models::*, templates, vscode_snippets};
 use gists_client::github::FetchGistOutcome;
 
-// ── Keychain helpers ──────────────────────────────────────────────────────────
-
-const KEYRING_SERVICE: &str = "com.gists-client.app";
-const KEYRING_ACCOUNT: &str = "github_token";
-
-/// Store token in OS keychain. Falls back silently if unavailable (e.g. headless Linux).
-fn keyring_set(token: &str) {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
-        let _ = entry.set_password(token);
-    }
-}
-
-/// Read token from OS keychain. Returns None if unavailable or not set.
-pub fn keyring_get() -> Option<String> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        .ok()
-        .and_then(|e| e.get_password().ok())
-        .filter(|t| !t.is_empty())
-}
-
-/// Remove token from OS keychain.
-fn keyring_delete() {
-    if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
-        let _ = entry.delete_password();
-    }
-}
+// Keychain helpers live in `gists_client::auth` so the desktop app and the `gist`
+// CLI share one keychain entry. Re-export `keyring_get` for `main.rs`.
+use gists_client::auth::{keyring_delete, keyring_set};
+pub use gists_client::auth::keyring_get;
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
@@ -999,6 +977,35 @@ pub fn delete_template(id: i32) -> Result<(), String> {
 #[tauri::command]
 pub fn save_gist_as_template(gist_id: String, name: String) -> Result<templates::Template, String> {
     templates::save_gist_as_template(&gist_id, &name).map_err(|e| e.to_string())
+}
+
+// ── VS Code snippets import ───────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn vscode_snippets_default_path() -> Option<String> {
+    vscode_snippets::default_snippets_dir()
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn vscode_snippets_preview(
+    path: Option<String>,
+) -> Result<Vec<vscode_snippets::VscodeSnippet>, String> {
+    vscode_snippets::preview(path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn vscode_snippets_import(
+    items: Vec<vscode_snippets::VscodeSnippet>,
+) -> Result<i32, String> {
+    let mut imported = 0;
+    for s in items {
+        let files = vec![(s.filename.clone(), s.body.clone())];
+        templates::create_template(&s.name, &s.description, false, &files)
+            .map_err(|e| e.to_string())?;
+        imported += 1;
+    }
+    Ok(imported)
 }
 
 // ── Code runner ───────────────────────────────────────────────────────────────

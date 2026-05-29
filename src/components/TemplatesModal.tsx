@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTemplateStore } from "../store/useTemplateStore";
 import { notify } from "../store/useNotificationStore";
 import type { Template } from "../api/tauri";
+import { VscodeSnippetsImportModal } from "./VscodeSnippetsImportModal";
 
 // ── Save-as-template modal ────────────────────────────────────────────────────
 
@@ -271,6 +272,7 @@ export function TemplatesModal({
   } = useTemplateStore();
   const [editingId, setEditingId] = useState<number | "new" | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [showVscodeImport, setShowVscodeImport] = useState(false);
 
   useEffect(() => {
     loadTemplates();
@@ -346,6 +348,13 @@ export function TemplatesModal({
                 onClick={() => setEditingId("new")}
               >
                 + New Template
+              </button>
+              <button
+                className="btn"
+                onClick={() => setShowVscodeImport(true)}
+                title="Import VS Code user snippets as templates"
+              >
+                ⇣ Import from VS Code
               </button>
               <span className="templates-modal__hint">
                 Templates scaffold new gists with pre-filled content
@@ -423,6 +432,12 @@ export function TemplatesModal({
           </>
         )}
       </div>
+      {showVscodeImport && (
+        <VscodeSnippetsImportModal
+          onClose={() => setShowVscodeImport(false)}
+          onImported={() => loadTemplates()}
+        />
+      )}
     </div>
   );
 }
