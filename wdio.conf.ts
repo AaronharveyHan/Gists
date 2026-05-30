@@ -4,7 +4,7 @@ import * as fs from "fs";
 
 // Resolve debug binary path based on platform
 function appBinaryPath(): string {
-  const base = path.resolve(__dirname, "target/debug");
+  const base = path.resolve(__dirname, "src-tauri/target/debug");
   if (process.platform === "win32") return path.join(base, "gists-client.exe");
   return path.join(base, "gists-client");
 }
