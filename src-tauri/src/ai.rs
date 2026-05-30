@@ -88,3 +88,39 @@ pub async fn stream_chat(
     let _ = window.emit(&format!("ai-done-{}", stream_id), ());
     Ok(())
 }
+
+/// One-shot (non-streaming) chat completion — used for batch jobs like the
+/// library organizer where per-item streaming would be wasteful. Returns the
+/// assistant message content.
+pub async fn complete(
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    messages: &[AiMessage],
+) -> anyhow::Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()?;
+
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&ChatRequest { model, messages, stream: false })
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("API error {}: {}", status, body);
+    }
+
+    let json: serde_json::Value = resp.json().await?;
+    Ok(json["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string())
+}

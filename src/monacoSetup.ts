@@ -31,3 +31,8 @@ import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker"
 // Tell @monaco-editor/react to use the locally-installed monaco-editor
 // package rather than fetching it from the CDN at runtime.
 loader.config({ monaco });
+
+// monaco-vim's UMD build falls through to the global-variable case in a
+// browser/ESM environment (no `exports`/`module`).  It expects `global.monaco`
+// to be set so the factory receives a live Monaco instance.
+(self as unknown as Record<string, unknown>).monaco = monaco;

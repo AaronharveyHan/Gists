@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { getToken, getCurrentLogin } from "./api/tauri";
+import { getToken, getCurrentLogin, getSetting } from "./api/tauri";
 import { useGistStore } from "./store/useGistStore";
 import { useAuthStore } from "./store/useAuthStore";
 import { Onboarding } from "./components/Onboarding";
 import { Layout } from "./components/Layout";
+import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { initErrorReporting } from "./lib/errorReporting";
 import "./styles/global.css";
 
 export default function App() {
@@ -11,6 +13,11 @@ export default function App() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
+    // Initialise optional crash reporting from persisted preference.
+    getSetting("error_reporting_enabled")
+      .then((v) => initErrorReporting(v === "true"))
+      .catch(() => {});
+
     // Local mode persists across restarts — restore it immediately.
     if (useAuthStore.getState().localMode) {
       setAuthenticated("local");
@@ -30,6 +37,9 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (checking) return <div className="splash">Loading…</div>;
-  if (!isAuthenticated) return <Onboarding />;
-  return <Layout />;
+  return (
+    <AppErrorBoundary>
+      {!isAuthenticated ? <Onboarding /> : <Layout />}
+    </AppErrorBoundary>
+  );
 }

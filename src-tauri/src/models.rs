@@ -185,3 +185,44 @@ pub struct UpdateGistFile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
 }
+
+/// One saved execution of a gist file.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunRecord {
+    pub id: i64,
+    pub gist_id: String,
+    pub filename: String,
+    pub ran_at: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+    pub duration_ms: i64,
+    pub timed_out: bool,
+    pub killed: bool,
+}
+
+/// One file in a three-way merge result.
+#[derive(Debug, Serialize)]
+pub struct MergedFile {
+    pub filename: String,
+    pub content: String,
+    pub had_conflict: bool,
+}
+
+/// Result of merging all files in a gist conflict.
+#[derive(Debug, Serialize)]
+pub struct MergeOutcome {
+    pub files: Vec<MergedFile>,
+    pub any_conflict: bool,
+}
+
+/// A saved GitHub account (name + token stored separately in keychain).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Account {
+    pub id: i64,
+    pub name: String,
+    pub login: Option<String>,
+    pub avatar_url: Option<String>,
+    pub token_key: String,
+    pub is_active: bool,
+}

@@ -24,6 +24,8 @@ export interface AiProvider {
   keyHint: string;
   /** Where to register / find the API key. Empty = no link shown. */
   docsUrl: string;
+  /** True for providers that run entirely on the local machine (e.g. Ollama). No API key required. */
+  local?: boolean;
 }
 
 export const AI_PROVIDERS: AiProvider[] = [
@@ -106,6 +108,7 @@ export const AI_PROVIDERS: AiProvider[] = [
     embedModel: "nomic-embed-text",
     keyHint: "ollama (or leave empty)",
     docsUrl: "https://ollama.com",
+    local: true,
   },
   {
     id: "custom",

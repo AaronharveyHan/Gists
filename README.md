@@ -1,6 +1,6 @@
-# Gists Client · v0.2
+# Gists Client · v0.3
 
-**本地优先的代码片段工作台。** 离线全文搜索 · Monaco 编辑器 · AI 对话 · 代码执行 · 版本历史 · 无订阅费。
+**本地优先的代码片段工作台。** 离线全文搜索 · Monaco 编辑器 · AI 对话 · 代码执行 · 版本历史 · 多账号 · 无订阅费。
 
 基于 GitHub Gist 存储，数据完全本地化（SQLite），无任何系统级依赖（含 git）。
 
@@ -17,8 +17,10 @@
 | 离线使用 | ✓ | ✗ | 部分 |
 | 本地全文搜索 | ✓ FTS5 | ✗ | ✗ |
 | AI 对话（自带模型） | ✓ | ✗ | ✗ |
-| 代码执行 | ✓ 7 种语言 | ✗ | ✗ |
+| 代码执行 + 历史归档 | ✓ 11 种语言 | ✗ | ✗ |
 | 版本历史 + diff | ✓ | ✓（需联网）| ✗ |
+| 三路合并冲突解决 | ✓ | ✗ | ✗ |
+| 多 GitHub 账号切换 | ✓ | ✗ | ✗ |
 | 本地草稿（不发布）| ✓ | ✗ | ✗ |
 | 自定义标签 + 分类 | ✓ | ✗ | 部分 |
 | 关系图可视化 | ✓ | ✗ | ✗ |
@@ -34,6 +36,7 @@
 - [使用教程](#使用教程)
   - [界面概览](#界面概览)
   - [首次设置](#首次设置)
+  - [多账号管理](#多账号管理)
   - [浏览与导航](#浏览与导航)
   - [搜索与过滤](#搜索与过滤)
   - [新建与编辑](#新建与编辑)
@@ -44,7 +47,7 @@
   - [版本历史浏览器](#版本历史浏览器)
   - [本地草稿与离线优先](#本地草稿与离线优先)
   - [模板系统](#模板系统)
-  - [代码运行](#代码运行)
+  - [代码运行与历史](#代码运行与历史)
   - [AI 助手](#ai-助手)
   - [国际化（中英双语）](#国际化中英双语)
   - [关系图视图](#关系图视图)
@@ -56,6 +59,7 @@
   - [统计面板](#统计面板)
   - [导出与导入](#导出与导入)
   - [专注模式与 Vim 模式](#专注模式与-vim-模式)
+  - [隐私与崩溃报告](#隐私与崩溃报告)
   - [快捷键速查](#快捷键速查)
 - [技术参考](#技术参考)
 
@@ -104,13 +108,14 @@ npm run tauri build
 
 | 功能模块 | 亮点 |
 |----------|------|
-| **编辑器** | Monaco（VS Code 同款）· 多文件标签页 · 自动草稿保存 · 冲突检测 |
+| **编辑器** | Monaco（VS Code 同款）· 多文件标签页 · 自动草稿保存 · 冲突检测 · 三路合并 |
 | **搜索** | FTS5 全文搜索 · `tag:` `lang:` `is:` 结构化过滤 · 跨 gist 内容搜索 |
-| **同步** | ETag 增量同步 · 冲突 Keep mine / Take remote · 速率限制退避 |
+| **同步** | ETag 增量同步 · 三路合并自动解决冲突 · 速率限制退避 |
 | **版本历史** | GitHub Commits 时间线 · diff 展开 · 一键 Restore |
 | **本地草稿** | 离线创建 gist · 联网后一键发布到 GitHub |
 | **模板系统** | 保存/管理模板 · 从模板新建 gist |
-| **代码运行** | 在编辑器内执行代码 · 流式输出 · 支持 10 种语言 |
+| **代码运行** | 在编辑器内执行代码 · 流式输出 · 历史归档 · 输出对比 · 支持 11 种语言 |
+| **多账号** | 命名 GitHub 账号（工作/个人）· OS 密钥链独立存储 · 工具栏头像一键切换 |
 | **AI 助手** | 流式 AI 对话 · Explain / Optimize / Tags / Describe 快捷指令 · 对话历史持久化 · 导出对话为草稿 |
 | **国际化** | 中 / 英双语界面 · 设置中一键切换 · 默认中文 |
 | **关系图** | 力导向图展示 gist ↔ 标签关系 · 拖拽 · 缩放 · 悬停详情 |
@@ -121,6 +126,7 @@ npm run tauri build
 | **命令行工具** | `gist save foo.py` · `list` · `search` · `view` · 与桌面端共享同一数据库 |
 | **统计** | 语言 / 分类 / 标签 / 月度活动可视化 |
 | **主题** | 跟随系统深浅色 · 多套 Monaco 主题 · Vim 模式 · 专注模式 |
+| **隐私** | 可选匿名崩溃报告（Sentry）· 本地 PII 脱敏 · 默认关闭 |
 
 ## 功能截图
 
@@ -196,6 +202,26 @@ npm run tauri build
 | **如何撤销？** | macOS：钥匙串访问.app → 搜索 `com.gists-client.app` 删除即可 |
 
 > 纯本地模式（首屏「跳过登录」）不会触发任何钥匙串请求——完全离线使用。
+
+---
+
+### 多账号管理
+
+工具栏右侧的头像/账号名下拉菜单，或 **Settings → Accounts** 标签页均可管理账号。
+
+#### 添加账号
+
+**Settings → Accounts → Add account**：输入名称（如「Work」「Personal」）和对应 GitHub PAT，点击 **Add**。系统自动验证 token 并从 `GET /user` 获取登录名和头像，每个 token 独立存入 OS 密钥链。
+
+#### 切换账号
+
+点击工具栏头像下拉菜单中的任意账号条目，即时切换；或在 **Settings → Accounts** 点击 **Switch**。切换后，所有后续同步/推送均使用新账号的 token。
+
+#### 移除账号
+
+**Settings → Accounts** 每行的 **✕** 按钮。至少保留一个账号——无法删除最后一个。
+
+> 首次启动时，旧版单 token 自动迁移为名为「Personal」的账号，无需手动操作。
 
 ---
 
@@ -295,10 +321,13 @@ npm run tauri build
 
 #### 冲突处理
 
-后台同步检测到正在编辑的 gist 有远端更新时，顶部弹出黄色横幅：
+后台同步检测到正在编辑的 gist 有远端更新时，应用自动尝试**三路合并**（base→local vs base→remote）：
 
-- **Keep mine** — 将本地内容推送，覆盖远端。
-- **Take remote** — 拉取远端最新版本，丢弃本地草稿。
+- **无冲突**：非重叠改动自动合并，静默应用，无需人工干预。
+- **有冲突**：在冲突文件内注入 Git 冲突标记，并弹出冲突横幅，显示每个冲突文件的 chip：
+  - 直接在编辑器内解决 `<<<<<<< Local` / `=======` / `>>>>>>> Remote` 冲突标记（行内红/蓝 Monaco 高亮）。
+  - 所有冲突解决后，**Conflicts resolved ✓** 按钮变为可点击状态，确认后推送合并结果。
+  - **Discard mine** — 放弃本地改动，完全采用远端版本。
 
 #### Find & Replace
 
@@ -417,24 +446,41 @@ npm run tauri build
 
 ---
 
-### 代码运行
+### 代码运行与历史
 
-在编辑器中直接执行当前文件，无需离开应用。
+在编辑器中直接执行当前文件，无需离开应用。每次执行结果自动归档到 SQLite，便于追踪输出变化。
 
 #### 支持语言
 
-`Python` · `JavaScript` · `TypeScript`（via ts-node）· `Shell / Bash / Zsh` · `Ruby` · `PHP` · `Go`
+`Python` · `JavaScript` · `TypeScript`（via ts-node）· `Shell / Bash / Zsh` · `Ruby` · `PHP` · `Go` · `MJS` · `CJS`
 
-#### 使用方式
+#### 基本使用
 
 - 当活跃文件为可执行扩展名时，编辑器工具栏出现 **▶ Run** 按钮。
 - 点击 **▶ Run**（或按 `⌘⇧E`）在编辑器底部展开运行面板。
 - 输出实时流式显示：stdout 为浅灰，stderr 为红色。
+- 运行完成后显示执行耗时和退出码，例如 `Finished in 0.42s · exit 0`。
 - 状态徽章：`Running`（动画）→ `Exit 0`（绿色）/ `Exit N`（红色）/ `Killed` / `Timed out`。
 - **Stop** 按钮发送 kill 信号终止运行；**Clear** 清空输出；**×** 关闭面板。
 - 执行超时上限：**30 秒**，超时后自动终止。
 
 > 代码写入临时目录（`$TMPDIR/gists-run-{id}/`）执行，完成后自动清理。
+
+#### 输出对比（vs last run）
+
+每次运行结果（stdout / stderr，各限 100 KB）自动写入本地 `run_history` 表，每个文件最多保留最近 **50** 条记录。
+
+运行完成后，若该文件有 ≥ 2 条历史记录，面板顶部出现 **vs last run** 按钮：
+
+- 点击后在输出区下方展开 unified diff，对比本次 stdout 与上次 stdout 的差异（绿色 = 新增，红色 = 删除）。
+- 再次点击 **Hide diff** 收起。
+
+#### 执行历史抽屉
+
+运行面板底部显示可折叠的 **▾ Run history (N)** 抽屉：
+
+- 列出每条历史：相对时间 · 退出码徽章 · 执行耗时。
+- 点击任意历史条目，在输出区预览该次运行的 stdout，顶部显示 **✕ Back to current** 返回按钮。
 
 ---
 
@@ -498,11 +544,12 @@ npm run tauri build
 | `common` | 通用操作按钮（保存、取消、删除…） |
 | `toolbar` | 工具栏所有按钮与同步状态提示 |
 | `sidebar` | 侧边栏搜索、排序、分类、标签操作 |
-| `editor` | 新建对话框、冲突横幅、草稿横幅 |
+| `editor` | 新建对话框、冲突横幅、草稿横幅、三路合并横幅 |
 | `ai` | AI 面板快捷指令、导出/清空按钮 |
 | `stats` | 统计面板所有标签与月份格式 |
-| `onboarding` | 引导向导全部步骤文案 |
-| `settings` | 设置弹窗各项标签 |
+| `onboarding` | 引导向导全部步骤文案（含隐私同意） |
+| `settings` | 设置弹窗各项标签（含账号、隐私） |
+| `runner` | 运行面板耗时、退出码、历史、对比文案 |
 
 ---
 
@@ -571,16 +618,26 @@ npm run tauri build
 
 为「在终端里写代码」的人准备的命令行入口。`gist` 与桌面端**共享同一个 SQLite 数据库和系统钥匙串**——终端保存的片段会立刻出现在 App 里，反之亦然。
 
-#### 构建与安装
+#### 安装
+
+**方式一：直接下载（推荐）** —— 每个 [Release](https://github.com/AaronharveyHan/gists_client/releases/latest) 都附带预编译的 CLI：
+
+```bash
+# macOS (Apple Silicon) / Linux (x86_64) 示例
+chmod +x gist-macos-arm64           # 或 gist-linux-x86_64
+mv gist-macos-arm64 /usr/local/bin/gist
+# Windows：把 gist-windows-x86_64.exe 改名为 gist.exe 放进 PATH
+```
+
+**方式二：从源码构建**
 
 ```bash
 # 在项目根目录
 cargo build --release --features cli --bin gist
-# 把产物放进 PATH（macOS / Linux 示例）
-cp src-tauri/target/release/gist /usr/local/bin/
+cp src-tauri/target/release/gist /usr/local/bin/   # macOS / Linux
 ```
 
-> CLI 用 `cli` feature 单独开启，因此 `cargo tauri build`（桌面端打包）不会编译它，桌面包体不受影响。
+> CLI 用 `cli` feature 单独开启，因此 `cargo tauri build`（桌面端打包）不会编译它，桌面包体不受影响。发布工作流会在三平台上单独编译并把二进制上传到 Release。
 
 #### 命令一览
 
@@ -700,6 +757,21 @@ Script Filter 脚本 `gist-search.sh` 调用 `gist ... --json`，再由 `to_alfr
 
 ---
 
+### 隐私与崩溃报告
+
+**Settings → Privacy** 中可开启可选的匿名崩溃报告（由 Sentry 托管）：
+
+| 项目 | 说明 |
+|------|------|
+| **默认状态** | 关闭，不收集任何数据 |
+| **收集内容** | 未捕获异常的堆栈帧（仅 gists-client 自身代码路径）和错误消息 |
+| **不收集** | 文件内容、描述、token、用户名、IP 地址（本地脱敏后发送） |
+| **随时关闭** | 再次进入 Privacy 设置取消勾选即可，立即生效 |
+
+引导向导第一步也会展示隐私说明，可在此处直接同意或跳过。
+
+---
+
 ### 快捷键速查
 
 按 `⌘?` 打开完整快捷键速查面板。常用快捷键：
@@ -784,7 +856,7 @@ gists-client/
 │       ├── Onboarding.tsx           # 四步引导向导
 │       ├── RevisionBrowser.tsx      # 历史版本侧面板
 │       ├── AIPanel.tsx              # AI 对话面板（流式响应 + 历史持久化）
-│       ├── RunPanel.tsx             # 代码运行输出面板
+│       ├── RunPanel.tsx             # 代码运行输出面板（历史归档 + vs-last-run diff）
 │       ├── GraphView.tsx            # 力导向关系图（Canvas）
 │       ├── TemplatesModal.tsx       # 模板管理 + 编辑表单
 │       ├── ShareModal.tsx           # 分享 / 嵌入面板
@@ -799,7 +871,9 @@ gists-client/
 │       ├── MarkdownPreview.tsx      # GFM + Mermaid 渲染
 │       ├── DiffModal.tsx            # Working tree diff
 │       ├── TagInput.tsx             # 标签选择器
-│       ├── SettingsModal.tsx        # 设置（主题/字体/Vim/Zen/AI/语言）
+│       ├── AccountSwitcher.tsx      # 工具栏账号下拉菜单
+│       ├── AppErrorBoundary.tsx     # React 错误边界（接入 Sentry）
+│       ├── SettingsModal.tsx        # 设置（主题/字体/Vim/Zen/AI/语言/账号/隐私）
 │       ├── ImportModal.tsx          # 导入预览
 │       └── VscodeSnippetsImportModal.tsx  # 从 VS Code 用户 snippets 批量导入为模板
 │
@@ -811,7 +885,8 @@ gists-client/
 │       ├── main.rs                  # Tauri builder、系统托盘、全局快捷键
 │       ├── bin/gist.rs              # 命令行工具（共享 lib + 同一 SQLite）
 │       ├── auth.rs                  # 共享钥匙串 + app-data 路径（桌面端 & CLI 共用）
-│       ├── commands.rs              # 所有 Tauri IPC 命令（~60 个）
+│       ├── telemetry.rs             # Sentry 崩溃报告（OnceCell 懒初始化）
+│       ├── commands.rs              # 所有 Tauri IPC 命令（~70 个）
 │       ├── ai.rs                    # AI 流式对话（OpenAI 兼容协议）
 │       ├── runner.rs                # 代码运行（多语言进程管理）
 │       ├── templates.rs             # 模板 CRUD
@@ -822,7 +897,8 @@ gists-client/
 │       ├── models.rs                # 共享类型
 │       ├── classifier.rs            # 启发式分类引擎
 │       ├── search_parser.rs         # 搜索语法解析
-│       └── diff.rs                  # unified diff（similar crate）
+│       ├── diff.rs                  # unified diff + 三路合并（similar crate Myers 算法）
+│       └── embedding.rs             # 语义向量生成
 │
 ├── .github/workflows/release.yml    # Tag 触发，macOS + Windows 并行构建 + 签名
 ├── package.json
@@ -904,6 +980,31 @@ CREATE TABLE template_files (
   content     TEXT NOT NULL DEFAULT '',
   sort_order  INTEGER NOT NULL DEFAULT 0
 );
+
+-- 多账号（每个 token 独立存 OS 密钥链，key = "gists_client_acct_{id}"）
+CREATE TABLE accounts (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT NOT NULL,
+  login      TEXT,
+  avatar_url TEXT,
+  token_key  TEXT NOT NULL DEFAULT '',
+  is_active  INTEGER NOT NULL DEFAULT 0
+);
+
+-- 代码执行历史（per gist_id + filename，最多保留 50 条）
+CREATE TABLE run_history (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  gist_id     TEXT NOT NULL REFERENCES gists(id) ON DELETE CASCADE,
+  filename    TEXT NOT NULL,
+  ran_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  exit_code   INTEGER NOT NULL DEFAULT -1,
+  stdout      TEXT NOT NULL DEFAULT '',  -- ≤ 100 KB，超出截断
+  stderr      TEXT NOT NULL DEFAULT '',  -- ≤ 100 KB，超出截断
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  timed_out   INTEGER NOT NULL DEFAULT 0,
+  killed      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX idx_run_history_gist ON run_history(gist_id, filename, ran_at DESC);
 ```
 
 ### 同步 & 编辑流程
@@ -927,7 +1028,10 @@ CREATE TABLE template_files (
   └─ run_code 命令立即返回，tokio::spawn 后台执行
   └─ 代码写入 $TMPDIR/gists-run-{id}/{filename}
   └─ 进程 stdout/stderr 逐行 emit run-line-{id} 事件
-  └─ 30 秒超时 → emit run-done-{id}，清理临时目录
+       └─ 同时缓存到 Arc<Mutex<Vec<String>>>（stdout/stderr 各 ≤ 100 KB）
+  └─ 30 秒超时 → 强制 kill，等待退出
+  └─ join I/O 任务，写入 run_history（SQLite），保留最近 50 条
+  └─ emit run-done-{id}（含 duration_ms），清理临时目录
 
 AI 对话
   └─ ai_chat 命令调用 OpenAI 兼容端点（流式 SSE）
@@ -940,6 +1044,7 @@ AI 对话
 | 层级 | 措施 |
 |------|------|
 | Token 存储 | OS 密钥链优先（macOS Keychain / Windows Credential / Linux keyutils），fallback SQLite |
+| 多账号隔离 | 每个账号独立密钥链条目（`gists_client_acct_{id}`），token 不落盘混存 |
 | Token 校验 | 格式预检 + `GET /user` 验证后才持久化 |
 | FTS5 注入防护 | 关键词白名单（字母、数字、`-_.`） |
 | Markdown XSS | `react-markdown` 设置 `skipHtml={true}` |
@@ -961,9 +1066,10 @@ AI 对话
 
 | 限制 | 说明 |
 |------|------|
-| Token 双存储 | Token 同时存 OS 密钥链和 SQLite 明文；生产建议集成 `tauri-plugin-stronghold` |
+| Token 双存储 | Token 同时存 OS 密钥链和 SQLite 明文作 fallback；生产建议集成 `tauri-plugin-stronghold` |
 | `files_changed` 字段 | `GistRevisionView::files_changed` 固定为 0，GitHub Commits API 不返回此字段 |
-| 无手动合并 | 冲突解决只有「保留本地」和「取远端」，不支持三路合并 |
 | 系统密钥链 | 无桌面 Session 的 Linux 环境密钥链不可用，自动降级为 SQLite 存储 |
 | 代码运行依赖 | 运行各语言需对应解释器已安装在系统 PATH（TypeScript 通过 `npx ts-node` 按需安装） |
+| 运行历史大小 | stdout/stderr 各限 100 KB，超出截断；每文件最多保留 50 条 |
 | 关系图性能 | 节点超过 ~300 时建议等待模拟自然收敛或使用 Re-layout 重置 |
+| 三路合并局限 | 行级合并；无法处理二进制文件重命名或跨文件依赖冲突 |

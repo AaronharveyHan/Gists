@@ -120,6 +120,7 @@ function applyVars(vars: ThemeVars) {
   for (const key of CSS_VARS) {
     root.style.setProperty(key, vars[key]);
   }
+  root.dataset.themeType = vars.monacoTheme === "vs" ? "light" : "dark";
 }
 
 function clearVars() {
@@ -127,6 +128,7 @@ function clearVars() {
   for (const key of CSS_VARS) {
     root.style.removeProperty(key);
   }
+  delete root.dataset.themeType;
 }
 
 export function applyTheme(presetId: string, accentOverride: string | null) {
@@ -156,6 +158,7 @@ interface ThemeState {
   sidebarWidth: number;
   zenMode: boolean;
   vimMode: boolean;
+  tabCompletion: boolean;
   sortOrder: SortOrder;
   setPreset: (id: string) => void;
   setAccentOverride: (color: string | null) => void;
@@ -164,6 +167,7 @@ interface ThemeState {
   setSidebarWidth: (w: number) => void;
   setZenMode: (on: boolean) => void;
   setVimMode: (on: boolean) => void;
+  setTabCompletion: (on: boolean) => void;
   setSortOrder: (order: SortOrder) => void;
 }
 
@@ -177,6 +181,7 @@ export const useThemeStore = create<ThemeState>()(
       sidebarWidth: 260,
       zenMode: false,
       vimMode: false,
+      tabCompletion: true,
       sortOrder: "updated",
 
       setPreset: (id) => {
@@ -196,6 +201,7 @@ export const useThemeStore = create<ThemeState>()(
       setSidebarWidth: (w) => set({ sidebarWidth: w }),
       setZenMode: (on) => set({ zenMode: on }),
       setVimMode: (on) => set({ vimMode: on }),
+      setTabCompletion: (on) => set({ tabCompletion: on }),
       setSortOrder: (order) => set({ sortOrder: order }),
     }),
     {
@@ -207,6 +213,7 @@ export const useThemeStore = create<ThemeState>()(
         autoSyncMinutes: s.autoSyncMinutes,
         sidebarWidth: s.sidebarWidth,
         vimMode: s.vimMode,
+        tabCompletion: s.tabCompletion,
         sortOrder: s.sortOrder,
       }),
       onRehydrateStorage: () => (state) => {

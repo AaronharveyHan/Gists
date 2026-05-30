@@ -302,6 +302,20 @@ export interface AiMessage {
 export const aiChat = (streamId: string, messages: AiMessage[]): Promise<void> =>
   invoke("ai_chat", { streamId, messages });
 
+/** One-shot (non-streaming) completion — returns the full assistant message. */
+export const aiComplete = (messages: AiMessage[]): Promise<string> =>
+  invoke("ai_complete", { messages });
+
+export interface SimilarPair {
+  a: string;
+  b: string;
+  score: number;
+}
+
+/** Near-duplicate gist pairs from stored embeddings (cosine ≥ threshold). */
+export const findDuplicateGists = (threshold: number): Promise<SimilarPair[]> =>
+  invoke("find_duplicate_gists", { threshold });
+
 // ── Local draft / offline-first ───────────────────────────────────────────────
 
 // ── Relation graph ────────────────────────────────────────────────────────────
@@ -326,18 +340,41 @@ export interface RunDone {
   exit_code: number;
   timed_out: boolean;
   killed: boolean;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+}
+
+export interface RunRecord {
+  id: number;
+  gist_id: string;
+  filename: string;
+  ran_at: string;
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+  duration_ms: number;
+  timed_out: boolean;
+  killed: boolean;
 }
 
 /** Start executing a file. Returns immediately; output arrives via run-line-{runId} events. */
 export const runCode = (
   runId: string,
+  gistId: string,
   filename: string,
   content: string
-): Promise<void> => invoke("run_code", { runId, filename, content });
+): Promise<void> => invoke("run_code", { runId, gistId, filename, content });
 
 /** Send a kill signal to a running execution. */
 export const killRun = (runId: string): Promise<void> =>
   invoke("kill_run", { runId });
+
+export const listRunHistory = (gistId: string, filename: string): Promise<RunRecord[]> =>
+  invoke("list_run_history", { gistId, filename });
+
+export const diffRuns = (idA: number, idB: number): Promise<string> =>
+  invoke("diff_runs", { idA, idB });
 
 // ── Collections ───────────────────────────────────────────────────────────────
 
@@ -480,3 +517,62 @@ export const createLocalGist = (
 /** Publish a local-only draft to GitHub, migrating its ID to the real GitHub ID. */
 export const publishLocalGist = (localId: string): Promise<Gist> =>
   invoke("publish_local_gist", { localId });
+
+// ── Wiki-links ([[gist-name]]) ────────────────────────────────────────────────
+
+/** Gists that contain [[link_text]] pointing at this gist (by description or filename). */
+export const getBacklinks = (gistId: string): Promise<Gist[]> =>
+  invoke("get_backlinks", { gistId });
+
+/** Resolve a [[link_text]] to the gist it refers to. Returns null if nothing matches. */
+export const resolveWikiLink = (linkText: string): Promise<Gist | null> =>
+  invoke("resolve_wiki_link", { linkText });
+
+// ── Error reporting ───────────────────────────────────────────────────────────
+
+/** Fire-and-forget: send an error message to the Rust telemetry layer. */
+export const captureError = (message: string, context?: string): Promise<void> =>
+  invoke("capture_error", { message, context });
+
+// ── Multi-account ─────────────────────────────────────────────────────────────
+
+export interface Account {
+  id: number;
+  name: string;
+  login: string | null;
+  avatar_url: string | null;
+  token_key: string;
+  is_active: boolean;
+}
+
+export const listAccounts = (): Promise<Account[]> =>
+  invoke("list_accounts");
+
+export const addAccount = (name: string, token: string): Promise<Account> =>
+  invoke("add_account", { name, token });
+
+export const removeAccount = (id: number): Promise<void> =>
+  invoke("remove_account", { id });
+
+export const switchAccount = (id: number): Promise<void> =>
+  invoke("switch_account", { id });
+
+// ── Three-way merge ───────────────────────────────────────────────────────────
+
+export interface MergedFile {
+  filename: string;
+  content: string;
+  had_conflict: boolean;
+}
+
+export interface MergeOutcome {
+  files: MergedFile[];
+  any_conflict: boolean;
+}
+
+export const mergeGistConflict = (
+  gistId: string,
+  localFiles: [string, string][],
+  remoteFiles: [string, string][]
+): Promise<MergeOutcome> =>
+  invoke("merge_gist_conflict", { gistId, localFiles, remoteFiles });

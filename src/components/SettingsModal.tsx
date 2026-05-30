@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { useThemeStore, PRESETS } from "../store/useThemeStore";
-import { getAiConfig, saveAiConfig } from "../api/tauri";
+import { getAiConfig, saveAiConfig, getSetting, saveSetting } from "../api/tauri";
 import { useT, useI18nStore } from "../store/useI18nStore";
 import { AI_PROVIDERS, detectProvider } from "../data/aiProviders";
+import { initErrorReporting } from "../lib/errorReporting";
+import { listAccounts, addAccount, removeAccount, switchAccount, type Account } from "../api/tauri";
+import { notify } from "../store/useNotificationStore";
 
 const DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 
@@ -28,9 +31,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const { lang, setLang } = useI18nStore();
   const {
     presetId, accentOverride, editorFontSize, autoSyncMinutes,
-    vimMode, zenMode,
+    vimMode, zenMode, tabCompletion,
     setPreset, setAccentOverride, setEditorFontSize, setAutoSyncMinutes,
-    setVimMode, setZenMode,
+    setVimMode, setZenMode, setTabCompletion,
   } = useThemeStore();
 
   const [aiBaseUrl, setAiBaseUrl] = useState(DASHSCOPE_URL);
@@ -41,6 +44,66 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [aiHasKey, setAiHasKey] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
+
+  const [crashReporting, setCrashReporting] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [addingAccount, setAddingAccount] = useState(false);
+  const [newAcctName, setNewAcctName] = useState("");
+  const [newAcctToken, setNewAcctToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const [acctSaving, setAcctSaving] = useState(false);
+
+  useEffect(() => {
+    getSetting("error_reporting_enabled").then((v) => {
+      setCrashReporting(v === "true");
+    }).catch(() => {});
+  }, []);
+
+  const handleCrashReportingToggle = (enabled: boolean) => {
+    setCrashReporting(enabled);
+    saveSetting("error_reporting_enabled", enabled ? "true" : "false").catch(() => {});
+    // Reinit frontend Sentry immediately
+    initErrorReporting(enabled);
+    // Backend Sentry picks up the setting on next app launch
+    notify(t.settings.privacyRestartHint, "info");
+  };
+
+  const loadAccounts = () =>
+    listAccounts()
+      .then(setAccounts)
+      .catch(() => {});
+
+  useEffect(() => { loadAccounts(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleAddAccount = async () => {
+    setAcctSaving(true);
+    try {
+      await addAccount(newAcctName.trim(), newAcctToken.trim());
+      notify(t.settings.addAccountSuccess(newAcctName.trim()), "success");
+      setNewAcctName("");
+      setNewAcctToken("");
+      setAddingAccount(false);
+      await loadAccounts();
+    } catch (e) {
+      notify(t.settings.addAccountError + " " + String(e), "error");
+    } finally {
+      setAcctSaving(false);
+    }
+  };
+
+  const handleRemoveAccount = async (id: number) => {
+    if (accounts.length <= 1) {
+      notify(t.settings.lastAccountWarning, "error");
+      return;
+    }
+    if (!confirm(t.settings.removeAccountConfirm)) return;
+    try {
+      await removeAccount(id);
+      await loadAccounts();
+    } catch (e) {
+      notify(String(e), "error");
+    }
+  };
 
   useEffect(() => {
     getAiConfig().then((cfg) => {
@@ -93,7 +156,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       className="modal-overlay"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div className="modal settings-modal" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="modal settings-modal" data-testid="settings-modal" onMouseDown={(e) => e.stopPropagation()}>
         <h2>{t.settings.title}</h2>
 
         <div className="settings-modal__body">
@@ -256,6 +319,17 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             {t.settings.zenMode}
             <kbd style={{ marginLeft: 6 }}>&#8984;\</kbd>
           </label>
+          <label className="modal__checkbox">
+            <input
+              type="checkbox"
+              checked={tabCompletion}
+              onChange={(e) => setTabCompletion(e.target.checked)}
+            />
+            <span>
+              {t.settings.tabCompletion}
+              <span className="settings-hint" style={{ display: "block", whiteSpace: "normal", fontSize: "0.8em", marginTop: 2 }}>{t.settings.tabCompletionHint}</span>
+            </span>
+          </label>
         </section>
 
         {/* ── AI Integration ─────────────────────────────────────── */}
@@ -274,12 +348,18 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                   onClick={() => handleProviderPick(p.id)}
                   title={p.tagline}
                 >
-                  <div className="ai-preset-card__label">{p.label}</div>
+                  <div className="ai-preset-card__label">
+                    {p.label}
+                    {p.local && <span className="ai-offline-badge">{t.settings.localBadge}</span>}
+                  </div>
                   <div className="ai-preset-card__tagline">{p.tagline}</div>
                 </button>
               ))}
             </div>
-            {currentProvider.docsUrl && (
+            {currentProvider.local && (
+              <div className="local-callout">{t.settings.localCallout}</div>
+            )}
+            {currentProvider.docsUrl && !currentProvider.local && (
               <button
                 type="button"
                 className="settings-link"
@@ -287,6 +367,16 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 style={{ alignSelf: "flex-start", marginTop: 4 }}
               >
                 ↗ {t.settings.getApiKeyFrom(currentProvider.label)}
+              </button>
+            )}
+            {currentProvider.docsUrl && currentProvider.local && (
+              <button
+                type="button"
+                className="settings-link"
+                onClick={() => open(currentProvider.docsUrl)}
+                style={{ alignSelf: "flex-start", marginTop: 4 }}
+              >
+                ↗ {t.settings.setupOllama}
               </button>
             )}
           </div>
@@ -311,7 +401,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               className="settings-input"
               value={aiApiKey}
               onChange={(e) => setAiApiKey(e.target.value)}
-              placeholder={aiHasKey ? t.settings.keyReplacePlaceholder : t.settings.keyNewPlaceholder}
+              placeholder={aiHasKey ? t.settings.keyReplacePlaceholder : currentProvider.local ? t.settings.keyOptionalPlaceholder : t.settings.keyNewPlaceholder}
               autoComplete="new-password"
             />
           </div>
@@ -366,6 +456,137 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             >
               {aiSaving ? t.settings.saving : aiSaved ? t.settings.savedCheck : t.settings.saveAiConfig}
             </button>
+          </div>
+        </section>
+
+        {/* ── Accounts ─────────────────────────────────────────────── */}
+        <section className="settings-section">
+          <div className="settings-section__title">{t.settings.accountsSection}</div>
+
+          {accounts.length === 0 && (
+            <p className="settings-hint">{t.settings.noAccounts}</p>
+          )}
+
+          {accounts.map((acc) => (
+            <div key={acc.id} className={`acct-row${acc.is_active ? " acct-row--active" : ""}`}>
+              {acc.avatar_url && (
+                <img className="acct-row__avatar" src={acc.avatar_url} alt="" />
+              )}
+              <span className="acct-row__info">
+                <span className="acct-row__name">{acc.name}</span>
+                {acc.login && (
+                  <span className="acct-row__login">@{acc.login}</span>
+                )}
+              </span>
+              {acc.is_active && (
+                <span className="acct-row__badge">{t.settings.activeAccount}</span>
+              )}
+              {!acc.is_active && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={async () => {
+                    try {
+                      await switchAccount(acc.id);
+                      await loadAccounts();
+                      notify(t.settings.accountSwitchedTo(acc.name), "success");
+                    } catch (e) { notify(String(e), "error"); }
+                  }}
+                >
+                  {t.settings.switchTo}
+                </button>
+              )}
+              {accounts.length > 1 && (
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  onClick={() => handleRemoveAccount(acc.id)}
+                  title={t.settings.removeAccount}
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+
+          {addingAccount ? (
+            <div className="acct-add-form">
+              <input
+                type="text"
+                className="input"
+                placeholder={t.settings.accountName}
+                value={newAcctName}
+                onChange={(e) => setNewAcctName(e.target.value)}
+              />
+              <div className="acct-add-form__token-row">
+                <input
+                  type={showToken ? "text" : "password"}
+                  className="input"
+                  placeholder={t.settings.tokenLabel}
+                  value={newAcctToken}
+                  onChange={(e) => setNewAcctToken(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => setShowToken((v) => !v)}
+                >
+                  {showToken ? t.common.hide : t.common.show}
+                </button>
+              </div>
+              <div className="settings-row" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn--primary"
+                  onClick={handleAddAccount}
+                  disabled={acctSaving || !newAcctName.trim() || !newAcctToken.trim()}
+                >
+                  {acctSaving ? t.common.saving : t.common.save}
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => { setAddingAccount(false); setNewAcctName(""); setNewAcctToken(""); }}
+                >
+                  {t.common.cancel}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setAddingAccount(true)}
+              style={{ marginTop: 8 }}
+            >
+              {t.settings.addAccount}
+            </button>
+          )}
+        </section>
+
+        {/* ── Privacy ──────────────────────────────────────────────── */}
+        <section className="settings-section">
+          <h3 className="settings-section__title">{t.settings.privacySection}</h3>
+          <div className="settings-row settings-row--toggle">
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={crashReporting}
+                onChange={(e) => handleCrashReportingToggle(e.target.checked)}
+              />
+              <span className="settings-toggle__label">{t.settings.crashReporting}</span>
+            </label>
+            <div className="settings-hint">
+              {t.settings.crashReportingHint}
+              {" "}
+              <button
+                type="button"
+                className="settings-link"
+                onClick={() => open("https://sentry.io/privacy/")}
+              >
+                {t.settings.learnWhatIsSent}
+              </button>
+            </div>
           </div>
         </section>
 

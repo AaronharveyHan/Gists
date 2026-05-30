@@ -78,6 +78,172 @@ pub fn compute_gist_diff(
     Ok(parts.join("\n"))
 }
 
+// ── Three-way merge ───────────────────────────────────────────────────────────
+
+pub struct MergeResult {
+    pub content: String,
+    pub had_conflict: bool,
+}
+
+/// Line-level three-way merge of `base` → `local` and `base` → `remote`.
+///
+/// Non-overlapping changes from either side are taken automatically.
+/// Overlapping changes produce standard Git conflict markers:
+///   <<<<<<< Local
+///   ...local lines...
+///   =======
+///   ...remote lines...
+///   >>>>>>> Remote
+pub fn three_way_merge(base: &str, local: &str, remote: &str) -> MergeResult {
+    // Fast-paths
+    if local == remote {
+        return MergeResult { content: local.to_string(), had_conflict: false };
+    }
+    if local == base {
+        return MergeResult { content: remote.to_string(), had_conflict: false };
+    }
+    if remote == base {
+        return MergeResult { content: local.to_string(), had_conflict: false };
+    }
+
+    let base_lines: Vec<&str> = base.lines().collect();
+    let local_lines: Vec<&str> = local.lines().collect();
+    let remote_lines: Vec<&str> = remote.lines().collect();
+
+    // Compute changesets from base to each side.
+    let local_ops = diff_ops(&base_lines, &local_lines);
+    let remote_ops = diff_ops(&base_lines, &remote_lines);
+
+    let mut output: Vec<String> = Vec::new();
+    let mut had_conflict = false;
+
+    // Walk base line-by-line using two cursors into the op slices.
+    let mut li = 0usize; // index into local_ops
+    let mut ri = 0usize; // index into remote_ops
+    let mut base_pos = 0usize;
+
+    while base_pos < base_lines.len() || li < local_ops.len() || ri < remote_ops.len() {
+        // Peek at the next local and remote operations touching base_pos.
+        let lop = local_ops.get(li);
+        let rop = remote_ops.get(ri);
+
+        match (lop, rop) {
+            // Both ops start at the same base position — potential conflict.
+            (Some(l), Some(r)) if l.old_start == base_pos && r.old_start == base_pos => {
+                let l_new: Vec<&str> = local_lines[l.new_start..l.new_start + l.new_len].to_vec();
+                let r_new: Vec<&str> = remote_lines[r.new_start..r.new_start + r.new_len].to_vec();
+                if l_new == r_new {
+                    // Both sides made the identical change — take it.
+                    for line in &l_new {
+                        output.push(line.to_string());
+                    }
+                } else {
+                    had_conflict = true;
+                    output.push("<<<<<<< Local".to_string());
+                    for line in &l_new {
+                        output.push(line.to_string());
+                    }
+                    output.push("=======".to_string());
+                    for line in &r_new {
+                        output.push(line.to_string());
+                    }
+                    output.push(">>>>>>> Remote".to_string());
+                }
+                base_pos += l.old_len;
+                li += 1;
+                ri += 1;
+            }
+            // Only local op at this base position.
+            (Some(l), _) if l.old_start == base_pos => {
+                let l_new = &local_lines[l.new_start..l.new_start + l.new_len];
+                for line in l_new {
+                    output.push(line.to_string());
+                }
+                base_pos += l.old_len;
+                li += 1;
+            }
+            // Only remote op at this base position.
+            (_, Some(r)) if r.old_start == base_pos => {
+                let r_new = &remote_lines[r.new_start..r.new_start + r.new_len];
+                for line in r_new {
+                    output.push(line.to_string());
+                }
+                base_pos += r.old_len;
+                ri += 1;
+            }
+            // No op touches this base line — emit it verbatim.
+            _ => {
+                if base_pos < base_lines.len() {
+                    output.push(base_lines[base_pos].to_string());
+                }
+                base_pos += 1;
+            }
+        }
+    }
+
+    let mut content = output.join("\n");
+    // Preserve trailing newline if either input had one.
+    if local.ends_with('\n') || remote.ends_with('\n') {
+        content.push('\n');
+    }
+
+    MergeResult { content, had_conflict }
+}
+
+/// A replaced hunk: `old_start..old_start+old_len` in base becomes
+/// `new_start..new_start+new_len` in the modified text.
+struct DiffOp {
+    old_start: usize,
+    old_len: usize,
+    new_start: usize,
+    new_len: usize,
+}
+
+/// Extract replacement hunks from a line diff (base → modified).
+fn diff_ops(base: &[&str], modified: &[&str]) -> Vec<DiffOp> {
+    use similar::TextDiff;
+
+    let base_str = base.join("\n");
+    let mod_str = modified.join("\n");
+    let diff = TextDiff::from_lines(base_str.as_str(), mod_str.as_str());
+
+    let mut ops: Vec<DiffOp> = Vec::new();
+
+    for group in diff.grouped_ops(0) {
+        for op in group {
+            use similar::DiffOp::*;
+            match op {
+                Equal { .. } => {}
+                Delete { old_index, old_len, new_index, .. } => {
+                    ops.push(DiffOp {
+                        old_start: old_index,
+                        old_len,
+                        new_start: new_index,
+                        new_len: 0,
+                    });
+                }
+                Insert { old_index, new_index, new_len } => {
+                    ops.push(DiffOp {
+                        old_start: old_index,
+                        old_len: 0,
+                        new_start: new_index,
+                        new_len,
+                    });
+                }
+                Replace { old_index, old_len, new_index, new_len } => {
+                    ops.push(DiffOp {
+                        old_start: old_index,
+                        old_len,
+                        new_start: new_index,
+                        new_len,
+                    });
+                }
+            }
+        }
+    }
+    ops
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +324,61 @@ mod tests {
         assert!(d.contains("-b"));
         assert!(d.contains("-c"));
         assert!(d.contains("-d"));
+    }
+
+    // ── three_way_merge tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn merge_no_conflict_different_sections() {
+        let base = "a\nb\nc\n";
+        let local = "A\nb\nc\n";   // changed line 1
+        let remote = "a\nb\nC\n";  // changed line 3
+        let r = three_way_merge(base, local, remote);
+        assert!(!r.had_conflict);
+        assert_eq!(r.content, "A\nb\nC\n");
+    }
+
+    #[test]
+    fn merge_conflict_same_line() {
+        let base = "a\nb\nc\n";
+        let local = "a\nLOCAL\nc\n";
+        let remote = "a\nREMOTE\nc\n";
+        let r = three_way_merge(base, local, remote);
+        assert!(r.had_conflict);
+        assert!(r.content.contains("<<<<<<< Local"));
+        assert!(r.content.contains("LOCAL"));
+        assert!(r.content.contains("======="));
+        assert!(r.content.contains("REMOTE"));
+        assert!(r.content.contains(">>>>>>> Remote"));
+    }
+
+    #[test]
+    fn merge_both_sides_identical_change() {
+        let base = "a\nb\n";
+        let local = "a\nX\n";
+        let remote = "a\nX\n";
+        let r = three_way_merge(base, local, remote);
+        assert!(!r.had_conflict);
+        assert_eq!(r.content, "a\nX\n");
+    }
+
+    #[test]
+    fn merge_local_unchanged() {
+        let base = "a\nb\n";
+        let local = "a\nb\n";
+        let remote = "a\nR\n";
+        let r = three_way_merge(base, local, remote);
+        assert!(!r.had_conflict);
+        assert_eq!(r.content, "a\nR\n");
+    }
+
+    #[test]
+    fn merge_remote_unchanged() {
+        let base = "a\nb\n";
+        let local = "a\nL\n";
+        let remote = "a\nb\n";
+        let r = three_way_merge(base, local, remote);
+        assert!(!r.had_conflict);
+        assert_eq!(r.content, "a\nL\n");
     }
 }

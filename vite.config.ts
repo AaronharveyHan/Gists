@@ -17,6 +17,10 @@ export default defineConfig({
       ignored: ["**/src-tauri/**"],
     },
   },
+  // Set VITE_SENTRY_DSN at build time to enable frontend error reporting.
+  // Example: VITE_SENTRY_DSN="https://<key>@<org>.ingest.sentry.io/<project>" npm run tauri build
+  // Leave unset (default) to disable Sentry entirely — no SDK code is bundled.
+  // Also set SENTRY_DSN for the Rust backend crash reporter.
   envPrefix: ["VITE_", "TAURI_"],
   build: {
     target: ["es2021", "chrome105", "safari13"],

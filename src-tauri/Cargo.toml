@@ -35,6 +35,10 @@ similar = { version = "2", features = ["text"] }
 futures = "0.3"
 keyring = { version = "2", features = ["linux-default-keyutils"] }
 dirs = "5"
+sentry = { version = "0.36.0", default-features = false, features = ["backtrace", "panic", "reqwest", "rustls"] }
+
+[target.'cfg(debug_assertions)'.dependencies]
+tauri-plugin-wdio = "1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -5,13 +5,15 @@ import { useKeyboard } from "../hooks/useKeyboard";
 import { clearToken, exportGists } from "../api/tauri";
 import { notify } from "../store/useNotificationStore";
 import { useT } from "../store/useI18nStore";
+import { AccountSwitcher } from "./AccountSwitcher";
 
 export function Toolbar({
-  onSettings, onPalette, onImport, onStats, onShortcuts, onTemplates, onGraph,
+  onSettings, onPalette, onImport, onStats, onShortcuts, onTemplates, onGraph, onCleanup,
 }: {
   onSettings: () => void; onPalette: () => void;
   onImport: (filePath: string) => void; onStats: () => void;
   onShortcuts: () => void; onTemplates: () => void; onGraph: () => void;
+  onCleanup: () => void;
 }) {
   const t = useT();
   const { githubLogin, logout, sync, syncStatus, syncError, lastSyncResult } =
@@ -133,17 +135,20 @@ export function Toolbar({
         <button className="toolbar__export" onClick={onGraph} title={t.toolbar.graphTitle}>
           {t.toolbar.graph}
         </button>
+        <button className="toolbar__export" onClick={onCleanup} title={t.toolbar.cleanupTitle}>
+          {t.toolbar.cleanup}
+        </button>
         {isLocalMode ? (
           <span className="toolbar__user toolbar__user--local" title={t.toolbar.localModeTitle}>
             {t.toolbar.localMode}
           </span>
         ) : (
-          <span className="toolbar__user">@{githubLogin}</span>
+          <AccountSwitcher />
         )}
         <button className="toolbar__export" onClick={onShortcuts} title={t.toolbar.shortcutsTitle}>
           ?
         </button>
-        <button className="toolbar__settings" onClick={onSettings} title={t.toolbar.settings}>
+        <button className="toolbar__settings" data-testid="settings-btn" onClick={onSettings} title={t.toolbar.settings}>
           {t.toolbar.settings}
         </button>
         {isLocalMode ? (

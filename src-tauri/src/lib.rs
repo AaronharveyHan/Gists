@@ -8,5 +8,6 @@ pub mod github;
 pub mod models;
 pub mod runner;
 pub mod search_parser;
+pub mod telemetry;
 pub mod templates;
 pub mod vscode_snippets;

@@ -24,6 +24,12 @@ import { PromptLibrary } from "./PromptLibrary";
 import { CollectionPicker } from "./CollectionPicker";
 import { ContextMenu } from "./ContextMenu";
 import type { ContextMenuEntry } from "./ContextMenu";
+import { AISelectionModal } from "./AISelectionModal";
+import type { AIAction } from "./AISelectionModal";
+import { BacklinksPanel } from "./BacklinksPanel";
+import { OverflowActions } from "./OverflowActions";
+import type { OverflowItem } from "./OverflowActions";
+import { useAiInlineCompletion } from "../hooks/useAiInlineCompletion";
 import * as api from "../api/tauri";
 import type { GistFile, Template } from "../api/tauri";
 import { RUNNABLE_EXTENSIONS } from "../api/tauri";
@@ -62,11 +68,15 @@ type MdViewMode = "source" | "preview" | "split";
 // ── Conflict state ────────────────────────────────────────────────────────────
 
 interface ConflictState {
-  /** Files from the remote (as updated by sync) */
   remoteFiles: GistFile[];
   remoteDescription: string;
-  /** The updated_at of the remote version that caused the conflict */
   remoteUpdatedAt: string;
+  /** Files after three-way merge (may contain <<<<<<< markers). */
+  mergedFiles: GistFile[];
+  /** Filenames that still contain conflict markers needing manual resolution. */
+  conflictedFilenames: Set<string>;
+  /** How many files were auto-merged without conflicts. */
+  autoMergedCount: number;
 }
 
 // ── Editor component ──────────────────────────────────────────────────────────
@@ -100,6 +110,10 @@ export function Editor() {
   // Ref-based mutex: prevents autoSave, pushToGitHub, and conflict resolution
   // from running concurrently (state updates are async and can't guard this).
   const isWriting = useRef(false);
+  // Suppresses Monaco's onChange when we programmatically update localFiles
+  // (conflict merge, silent refresh). Monaco fires onChange even for prop-driven
+  // setValue(), so without this flag the merge would set isDirty incorrectly.
+  const isProgrammaticUpdate = useRef(false);
 
   // True once the user has made any change in the current edit session.
   const [isDirty, setIsDirty] = useState(false);
@@ -107,16 +121,34 @@ export function Editor() {
   const [showHistory, setShowHistory] = useState(false);
   const [showAI, setShowAI] = useState(false);
   const [showRun, setShowRun] = useState(false);
+  const [showBacklinks, setShowBacklinks] = useState(false);
   const [runTrigger, setRunTrigger] = useState(0);
   const [showSaveAsTemplate, setShowSaveAsTemplate] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const [showPromptLib, setShowPromptLib] = useState(false);
-  const { presetId, editorFontSize, vimMode } = useThemeStore();
+  const { presetId, editorFontSize, vimMode, tabCompletion } = useThemeStore();
   const monacoTheme = resolveMonacoTheme(presetId);
   const { setCursor, setSelection, setActiveFilename } = useEditorUIStore();
   const editorRef = useRef<any>(null);
+  const monacoRef = useRef<any>(null);
   const vimRef = useRef<{ dispose: () => void } | null>(null);
   const vimStatusRef = useRef<HTMLDivElement>(null);
+  const wikiCompletionRef = useRef<{ dispose: () => void } | null>(null);
+
+  // Becomes true once Monaco has loaded; gates the inline completion provider.
+  const [monacoReady, setMonacoReady] = useState(false);
+  useAiInlineCompletion(monacoRef, tabCompletion, monacoReady);
+
+  // Clean up the wiki-link completion provider on unmount.
+  useEffect(() => () => { wikiCompletionRef.current?.dispose(); }, []);
+
+  // Selection-based AI action (rewrite / translate / generate tests).
+  const [aiSelection, setAiSelection] = useState<{
+    action: AIAction;
+    code: string;
+    language: string;
+    range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
+  } | null>(null);
 
   // Track filenames deleted locally so pushToGitHub can send null to the API.
   const [deletedFiles, setDeletedFiles] = useState<Set<string>>(new Set());
@@ -200,20 +232,87 @@ export function Editor() {
     let cancelled = false;
     void api
       .fetchGistFromGitHub(gist.id)
-      .then((remote) => {
+      .then(async (remote) => {
         if (cancelled) return;
-        setConflict({
-          remoteFiles: remote.files,
-          remoteDescription: remote.description,
-          remoteUpdatedAt: remote.updated_at,
-        });
+
+        // Attempt a three-way merge: base (snapshot) + local edits + remote.
+        try {
+          const localPairs: [string, string][] = localFiles.map((f) => [f.filename, f.content]);
+          const remotePairs: [string, string][] = remote.files.map((f) => [f.filename, f.content]);
+          const outcome = await api.mergeGistConflict(gist.id, localPairs, remotePairs);
+
+          if (!outcome.any_conflict) {
+            // Clean auto-merge — apply silently, no banner needed.
+            const merged: GistFile[] = outcome.files.map((mf) => ({
+              filename: mf.filename,
+              language: remote.files.find((f) => f.filename === mf.filename)?.language ?? null,
+              content: mf.content,
+              size: mf.content.length,
+              raw_url: null,
+            }));
+            isProgrammaticUpdate.current = true;
+            setLocalFiles(merged);
+            setDescription(remote.description);
+            setConflict(null);
+            // Save directly so isDirty stays false — no ● shown.
+            // debouncedSave can't be used here because its autoSaveLocal closure
+            // still captures the old conflict value until the next render.
+            if (gist) {
+              try {
+                const pairs: [string, string][] = merged.map((f) => [f.filename, f.content]);
+                await saveGistDraft(gist.id, remote.description, pairs);
+              } catch {
+                setIsDirty(true);
+              }
+            }
+            return;
+          }
+
+          // Has conflicts — inject merged content (with markers) into editor.
+          const mergedFiles: GistFile[] = outcome.files.map((mf) => ({
+            filename: mf.filename,
+            language: remote.files.find((f) => f.filename === mf.filename)?.language ?? null,
+            content: mf.content,
+            size: mf.content.length,
+            raw_url: null,
+          }));
+          const conflictedFilenames = new Set(
+            outcome.files.filter((f) => f.had_conflict).map((f) => f.filename)
+          );
+          const autoMergedCount = outcome.files.filter((f) => !f.had_conflict).length;
+
+          isProgrammaticUpdate.current = true;
+          setLocalFiles(mergedFiles);
+          setConflict({
+            remoteFiles: remote.files,
+            remoteDescription: remote.description,
+            remoteUpdatedAt: remote.updated_at,
+            mergedFiles,
+            conflictedFilenames,
+            autoMergedCount,
+          });
+        } catch {
+          // Merge IPC failed — fall back to old binary banner.
+          setConflict({
+            remoteFiles: remote.files,
+            remoteDescription: remote.description,
+            remoteUpdatedAt: remote.updated_at,
+            mergedFiles: localFiles,
+            conflictedFilenames: new Set(localFiles.map((f) => f.filename)),
+            autoMergedCount: 0,
+          });
+        }
       })
       .catch(() => {
         if (cancelled) return;
+        // Can't reach GitHub — surface banner with no merge info.
         setConflict({
           remoteFiles: gist.files,
           remoteDescription: gist.description,
           remoteUpdatedAt: cur,
+          mergedFiles: localFiles,
+          conflictedFilenames: new Set(localFiles.map((f) => f.filename)),
+          autoMergedCount: 0,
         });
       });
 
@@ -277,6 +376,7 @@ export function Editor() {
   };
 
   const handleContentChange = (value: string | undefined) => {
+    if (isProgrammaticUpdate.current) return;
     if (!activeFile) return;
     const updated = localFiles.map((f) =>
       f.filename === activeFile ? { ...f, content: value ?? "" } : f
@@ -404,8 +504,19 @@ export function Editor() {
 
   // ── Conflict resolution ──────────────────────────────────────────────────
 
-  const handleKeepMine = async () => {
-    if (!gist || !conflict || isWriting.current) return;
+  // True when the user has manually removed all <<<<<<< markers.
+  const hasRemainingMarkers = conflict
+    ? localFiles.some((f) => f.content.includes("<<<<<<<"))
+    : false;
+
+  // Which conflicted files still have markers (drives the file-chip list).
+  const remainingConflictFiles = conflict
+    ? localFiles.filter((f) => f.content.includes("<<<<<<<")).map((f) => f.filename)
+    : [];
+
+  // Push the current editor state to GitHub — used after manual resolution.
+  const handleConflictsResolved = async () => {
+    if (!gist || !conflict || isWriting.current || hasRemainingMarkers) return;
     isWriting.current = true;
     setSaving(true);
     try {
@@ -430,7 +541,8 @@ export function Editor() {
     }
   };
 
-  const handleTakeRemote = async () => {
+  // Escape hatch: discard local edits, pull remote.
+  const handleDiscardMine = async () => {
     if (!gist || !conflict || isWriting.current) return;
     isWriting.current = true;
     setSaving(true);
@@ -448,6 +560,7 @@ export function Editor() {
     }
   };
 
+
   // ── Markdown preview sync ────────────────────────────────────────────────
 
   const activeContent =
@@ -455,6 +568,13 @@ export function Editor() {
 
   const isMdActive = Boolean(gist) && isMarkdownFilename(activeFile);
   const mdPreviewKey = `${gist?.id ?? ""}:${activeFile ?? ""}`;
+
+  // Reset the programmatic-update guard after Monaco has processed the new value.
+  // Monaco (child) effects run before Editor (parent) effects, so by the time
+  // this fires, Monaco's setValue() and any resulting onChange() have already run.
+  useEffect(() => {
+    isProgrammaticUpdate.current = false;
+  }, [activeContent]);
 
   // 换 gist / 换文件：立即刷新预览；同一 .md 文件内输入：防抖刷新
   useEffect(() => {
@@ -483,6 +603,11 @@ export function Editor() {
     setShowHistory(false);
   }, []);
   useKeyboard("a", "meta+shift", toggleAI);
+
+  const toggleBacklinks = useCallback(() => {
+    setShowBacklinks((v) => !v);
+  }, []);
+  useKeyboard("b", "meta+shift", toggleBacklinks);
 
   const openSaveAsTemplate = useCallback(() => setShowSaveAsTemplate(true), []);
   useKeyboard("t", "meta+shift", openSaveAsTemplate);
@@ -528,9 +653,17 @@ export function Editor() {
       const ed = editorRef.current;
       const statusEl = vimStatusRef.current;
       let disposed = false;
-      import("monaco-vim").then(({ initVimMode: init }) => {
+      import("monaco-vim").then((mod: unknown) => {
         if (disposed) return;
-        vimRef.current = init(ed, statusEl);
+        // The UMD build may export via named export, default, or global.
+        type Mod = { initVimMode?: unknown; default?: { initVimMode?: unknown } };
+        const m = mod as Mod;
+        const initVimMode =
+          m.initVimMode ??
+          m.default?.initVimMode ??
+          (self as unknown as Record<string, { initVimMode?: unknown }>).MonacoVim?.initVimMode;
+        if (typeof initVimMode !== "function") return;
+        vimRef.current = initVimMode(ed, statusEl);
       });
       return () => {
         disposed = true;
@@ -568,8 +701,9 @@ export function Editor() {
   }, []);
 
   const handleEditorMount = useCallback(
-    (editor: any) => {
+    (editor: any, monaco: any) => {
       editorRef.current = editor;
+      monacoRef.current = monaco;
       editor.onDidChangeCursorPosition((e: any) => {
         setCursor(e.position.lineNumber, e.position.column);
       });
@@ -586,8 +720,174 @@ export function Editor() {
           setSelection(text.length, lines);
         }
       });
+
+      // ── Selection AI actions (native right-click menu, shown only with a selection) ──
+      const addAiAction = (id: string, label: string, action: AIAction, order: number) => {
+        editor.addAction({
+          id,
+          label,
+          precondition: "editorHasSelection",
+          contextMenuGroupId: "ai",
+          contextMenuOrder: order,
+          run: (ed: any) => {
+            const sel = ed.getSelection();
+            const model = ed.getModel();
+            if (!sel || sel.isEmpty() || !model) return;
+            setAiSelection({
+              action,
+              code: model.getValueInRange(sel),
+              language: model.getLanguageId?.() || "text",
+              range: {
+                startLineNumber: sel.startLineNumber,
+                startColumn: sel.startColumn,
+                endLineNumber: sel.endLineNumber,
+                endColumn: sel.endColumn,
+              },
+            });
+          },
+        });
+      };
+      addAiAction("ai-rewrite", t.ai.actionRewrite, "rewrite", 1);
+      addAiAction("ai-translate", t.ai.actionTranslate, "translate", 2);
+      addAiAction("ai-tests", t.ai.actionTests, "tests", 3);
+
+      // ── [[gist-name]] autocomplete ──────────────────────────────────────────
+      // Triggers when the user types "[[" and offers all known gist names.
+      const wikiCompletionDisposable = monaco.languages.registerCompletionItemProvider("*", {
+        triggerCharacters: ["["],
+        provideCompletionItems: (model: any, position: any) => {
+          const line = model.getValueInRange({
+            startLineNumber: position.lineNumber,
+            startColumn: 1,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          });
+          // Only trigger when the user just typed "[[" (possibly with a partial name).
+          const match = line.match(/\[\[([^\]]*)$/);
+          if (!match) return { suggestions: [] };
+
+          const partial = match[1].toLowerCase();
+          const gists = useGistStore.getState().gists;
+          const suggestions: any[] = [];
+          const replaceRange = {
+            startLineNumber: position.lineNumber,
+            startColumn: position.column - match[1].length,
+            endLineNumber: position.lineNumber,
+            endColumn: position.column,
+          };
+
+          for (const g of gists) {
+            const names: string[] = [];
+            if (g.description?.trim()) names.push(g.description.trim());
+            for (const f of g.files) names.push(f.filename);
+
+            for (const name of names) {
+              if (partial && !name.toLowerCase().includes(partial)) continue;
+              suggestions.push({
+                label: name,
+                kind: monaco.languages.CompletionItemKind.Reference,
+                detail: g.description?.trim() || g.files[0]?.filename || "",
+                insertText: `${name}]]`,
+                range: replaceRange,
+                sortText: name.toLowerCase(),
+              });
+            }
+          }
+          return { suggestions };
+        },
+      });
+      wikiCompletionRef.current = wikiCompletionDisposable;
+
+      // Signal that Monaco is ready so the inline completion provider can register.
+      setMonacoReady(true);
     },
-    [setCursor, setSelection]
+    [setCursor, setSelection, t, setMonacoReady]
+  );
+
+  // ── Conflict-marker decorations ──────────────────────────────────────────
+  // Highlight <<<<<<< / ======= / >>>>>>> lines so users can navigate quickly.
+
+  const conflictDecoIds = useRef<string[]>([]);
+
+  const applyConflictDecorations = useCallback(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco || !conflict) {
+      if (editorRef.current && conflictDecoIds.current.length) {
+        editorRef.current.deltaDecorations(conflictDecoIds.current, []);
+        conflictDecoIds.current = [];
+      }
+      return;
+    }
+    const model = editor.getModel();
+    if (!model) return;
+    const decorations: any[] = [];
+    const lineCount = model.getLineCount();
+    for (let i = 1; i <= lineCount; i++) {
+      const text = model.getLineContent(i);
+      if (text.startsWith("<<<<<<<")) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: {
+            isWholeLine: true,
+            className: "conflict-line conflict-line--ours",
+            glyphMarginClassName: "conflict-glyph conflict-glyph--ours",
+          },
+        });
+      } else if (text.startsWith("=======")) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: { isWholeLine: true, className: "conflict-line conflict-line--sep" },
+        });
+      } else if (text.startsWith(">>>>>>>")) {
+        decorations.push({
+          range: new monaco.Range(i, 1, i, 1),
+          options: {
+            isWholeLine: true,
+            className: "conflict-line conflict-line--theirs",
+            glyphMarginClassName: "conflict-glyph conflict-glyph--theirs",
+          },
+        });
+      }
+    }
+    conflictDecoIds.current = editor.deltaDecorations(conflictDecoIds.current, decorations);
+  }, [conflict]);
+
+  // Re-run decorations whenever the file content or conflict state changes.
+  useEffect(() => {
+    applyConflictDecorations();
+  }, [activeFile, localFiles, conflict, applyConflictDecorations]);
+
+  // Apply an AI result back into the editor; onChange then handles dirty + save.
+  const applyAiResult = useCallback(
+    (
+      range: { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number },
+      text: string,
+      insertBelow: boolean
+    ) => {
+      const editor = editorRef.current;
+      const model = editor?.getModel();
+      if (!editor || !model) return;
+      if (insertBelow) {
+        const col = model.getLineMaxColumn(range.endLineNumber);
+        editor.executeEdits("ai-selection", [
+          {
+            range: {
+              startLineNumber: range.endLineNumber,
+              startColumn: col,
+              endLineNumber: range.endLineNumber,
+              endColumn: col,
+            },
+            text: "\n" + text,
+            forceMoveMarkers: true,
+          },
+        ]);
+      } else {
+        editor.executeEdits("ai-selection", [{ range, text, forceMoveMarkers: true }]);
+      }
+      editor.focus();
+    },
+    []
   );
 
   // ── Empty state ──────────────────────────────────────────────────────────
@@ -595,7 +895,12 @@ export function Editor() {
   if (!gist) {
     return (
       <div className="editor editor--empty">
-        <p>Select a gist, or press <kbd>⌘N</kbd> to create one</p>
+        <div className="editor__empty-sparkles" aria-hidden>✦ ✦ ✦</div>
+        <p className="editor__empty-title">Open a Gist</p>
+        <p className="editor__empty-hint">
+          Select from the sidebar, or press <kbd>⌘K</kbd> to search<br />
+          Press <kbd>⌘N</kbd> to create a new one
+        </p>
       </div>
     );
   }
@@ -659,25 +964,46 @@ export function Editor() {
         </div>
       )}
 
-      {/* Conflict banner */}
+      {/* Conflict banner — shown only when markers remain after auto-merge */}
       {conflict && (
         <div className="conflict-banner">
-          <span className="conflict-banner__msg">
-            {t.editor.conflictBanner}
-          </span>
+          <div className="conflict-banner__top">
+            <span className="conflict-banner__msg">
+              {t.editor.mergeConflictBanner(conflict.autoMergedCount)}
+            </span>
+            {remainingConflictFiles.length > 0 && (
+              <span className="conflict-banner__files">
+                {remainingConflictFiles.map((fn) => (
+                  <button
+                    key={fn}
+                    className="conflict-banner__file-chip"
+                    onClick={() => setActiveFile(fn)}
+                    title={fn}
+                  >
+                    {fn}
+                  </button>
+                ))}
+                <span className="conflict-banner__remaining">
+                  {t.editor.conflictsRemaining(remainingConflictFiles.length)}
+                </span>
+              </span>
+            )}
+          </div>
           <div className="conflict-banner__actions">
             <button
               className="btn btn--primary conflict-banner__btn"
-              onClick={handleKeepMine}
-              disabled={saving}
+              onClick={handleConflictsResolved}
+              disabled={saving || hasRemainingMarkers}
+              title={hasRemainingMarkers ? t.editor.conflictsRemaining(remainingConflictFiles.length) : undefined}
             >
-              {t.editor.keepMine}
+              {t.editor.conflictsResolved}
             </button>
             <button
               className="btn conflict-banner__btn"
-              onClick={handleTakeRemote}
+              onClick={handleDiscardMine}
+              disabled={saving}
             >
-              {t.editor.takeRemote}
+              {t.editor.discardMine}
             </button>
           </div>
         </div>
@@ -690,160 +1016,251 @@ export function Editor() {
           onChange={handleDescChange}
           placeholder={t.editor.descriptionPlaceholder}
         />
-        <div className="editor__actions">
+        {/* ── Right side: status chips + overflow toolbar ── */}
+        <div className="editor__actions-wrap">
+        {/* Status chips (always visible, outside overflow) */}
+        <div className="editor__status-chips">
           {isDirty && !saving && (
-            <span
-              className="editor__dirty"
-              title={t.editor.typingNotSaved}
-            >
-              ●
-            </span>
+            <span className="editor__dirty" title={t.editor.typingNotSaved}>●</span>
           )}
           {!isDirty && gist.pending_push && !saving && (
-            <span
-              className="editor__pending-push"
-              title={t.editor.savedLocally}
-            >
-              ↑
-            </span>
+            <span className="editor__pending-push" title={t.editor.savedLocally}>↑</span>
           )}
           {saving && (
             <span className="editor__saving">{t.common.saving}</span>
           )}
-          {gist.local_only ? (
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={async () => {
-                if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
-                try {
-                  await publishGist(gist.id);
-                  notify(t.editor.publishSuccess, "success");
-                } catch (e) {
-                  notify(t.editor.publishFailed + " " + String(e));
-                }
-              }}
-              disabled={saving || !networkOnline}
-              title={networkOnline ? t.editor.publish : t.editor.offline}
-            >
-              {networkOnline ? t.editor.publish : t.editor.offline}
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn--primary"
-              onClick={() => void pushToGitHub()}
-              disabled={saving || !gist.pending_push || !!conflict || isDirty}
-              title={isDirty ? t.editor.waitForSave : t.editor.syncToGitHubTitle}
-            >
-              {t.editor.syncToGitHub}
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn editor__find-btn"
-            onClick={openFind}
-            title={t.editor.findTitle}
-          >
-            {t.editor.find}
-          </button>
-          <button
-            type="button"
-            className="btn editor__find-btn"
-            onClick={openReplace}
-            title={t.editor.replaceTitle}
-          >
-            {t.editor.replace}
-          </button>
-          <button
-            type="button"
-            className={`btn ${showHistory ? "btn--primary" : ""}`}
-            onClick={() => toggleHistory()}
-            title={t.editor.historyTitle}
-          >
-            {t.editor.history}
-          </button>
-          <button
-            type="button"
-            className={`btn ${showAI ? "btn--primary" : ""}`}
-            onClick={() => toggleAI()}
-            title={t.editor.aiTitle}
-          >
-            {t.editor.ai}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setShowSaveAsTemplate(true)}
-            title={t.editor.templateTitle}
-          >
-            {t.editor.template}
-          </button>
-          <button
-            type="button"
-            className={`btn editor__prompt-btn${gist.category === "prompt" ? " btn--prompt-active" : ""}`}
-            onClick={async () => {
-              if (gist.category === "prompt") {
-                await api.setGistCategory(gist.id, "gist");
-                notify(t.editor.promptRemoved, "success");
-              } else {
-                await api.setGistCategory(gist.id, "prompt");
-                notify(t.editor.promptAdded, "success");
-              }
-              await useGistStore.getState().loadGists();
-            }}
-            title={gist.category === "prompt" ? t.editor.removeFromPrompt : t.editor.addToPrompt}
-          >
-            {gist.category === "prompt" ? t.editor.promptStar : t.editor.promptEmpty}
-          </button>
-          <button
-            type="button"
-            className="btn editor__prompt-lib-btn"
-            onClick={() => setShowPromptLib(true)}
-            title={t.editor.libraryTitle}
-          >
-            {t.editor.library}
-          </button>
-          <button
-            type="button"
-            className="btn editor__share-btn"
-            onClick={() => setShowShare(true)}
-            title={t.editor.shareTitle}
-          >
-            {t.editor.share}
-          </button>
-          {isRunnable && (
-            <button
-              type="button"
-              className={`btn editor__run-btn ${showRun ? "btn--primary" : ""}`}
-              onClick={handleRun}
-              title={t.editor.runTitle}
-            >
-              {t.editor.run}
-            </button>
-          )}
-          <a
-            className="btn btn--ghost"
-            href={gist.html_url}
-            onClick={(e) => {
-              e.preventDefault();
-              import("@tauri-apps/plugin-shell").then(({ open }) =>
-                open(gist.html_url)
-              );
-            }}
-          >
-            {t.editor.viewOnGitHub}
-          </a>
-          <button
-            className="btn btn--danger"
-            onClick={() => {
-              if (confirm(t.editor.deleteConfirm))
-                deleteGist(gist.id).catch((e) => notify(t.editor.deleteFailed + " " + String(e)));
-            }}
-          >
-            {t.editor.delete}
-          </button>
         </div>
+
+        {/* ── Overflow toolbar ── */}
+        <OverflowActions items={(() => {
+          const allItems: OverflowItem[] = [
+            // ── Tier 1: Primary actions ──────────────────────────────────────
+            {
+              key: "sync",
+              priority: 1,
+              // Hide when there's nothing to sync (no pending push, not local-only)
+              hidden: !gist.local_only && !gist.pending_push,
+              node: gist.local_only ? (
+                <button
+                  type="button"
+                  className={`btn${networkOnline ? " btn--sync-ready" : ""}`}
+                  onClick={async () => {
+                    if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
+                    try { await publishGist(gist.id); notify(t.editor.publishSuccess, "success"); }
+                    catch (e) { notify(t.editor.publishFailed + " " + String(e)); }
+                  }}
+                  disabled={saving || !networkOnline}
+                  title={networkOnline ? t.editor.publish : t.editor.offline}
+                >
+                  {networkOnline ? `↑ ${t.editor.publish}` : t.editor.offline}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={`btn${(gist.pending_push && !isDirty && !conflict) ? " btn--sync-ready" : ""}`}
+                  onClick={() => void pushToGitHub()}
+                  disabled={saving || !gist.pending_push || !!conflict || isDirty}
+                  title={isDirty ? t.editor.waitForSave : t.editor.syncToGitHubTitle}
+                >
+                  {`↑ ${t.editor.syncToGitHub}`}
+                </button>
+              ),
+              menuLabel: gist.local_only ? t.editor.publish : t.editor.syncToGitHub,
+              menuOnClick: gist.local_only
+                ? async () => {
+                    if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
+                    try { await publishGist(gist.id); notify(t.editor.publishSuccess, "success"); }
+                    catch (e) { notify(t.editor.publishFailed + " " + String(e)); }
+                  }
+                : () => void pushToGitHub(),
+              menuDisabled: gist.local_only
+                ? saving || !networkOnline
+                : saving || !gist.pending_push || !!conflict || isDirty,
+            },
+            {
+              key: "run",
+              priority: 1,
+              hidden: !isRunnable,
+              node: (
+                <button
+                  type="button"
+                  className={`btn editor__run-btn${showRun ? " btn--primary" : " btn--primary"}`}
+                  onClick={handleRun}
+                  title={t.editor.runTitle}
+                >
+                  {t.editor.run}
+                </button>
+              ),
+              menuLabel: t.editor.run,
+              menuOnClick: handleRun,
+            },
+
+            // ── Separator before editing tools ────────────────────────────────
+            { key: "sep-edit", priority: 2, isSeparator: true, node: null, menuLabel: "" },
+
+            // ── Tier 3: Editing tools (icon-only) ────────────────────────────
+            {
+              key: "find",
+              priority: 2,
+              node: (
+                <button type="button" className="btn btn--icon" onClick={openFind} title={t.editor.findTitle}>
+                  ⌕
+                </button>
+              ),
+              menuLabel: t.editor.find,
+              menuOnClick: openFind,
+            },
+            {
+              key: "replace",
+              priority: 2,
+              node: (
+                <button type="button" className="btn btn--icon" onClick={openReplace} title={t.editor.replaceTitle}>
+                  ⇄
+                </button>
+              ),
+              menuLabel: t.editor.replace,
+              menuOnClick: openReplace,
+            },
+
+            // ── Separator before panel toggles ────────────────────────────────
+            { key: "sep-panels", priority: 3, isSeparator: true, node: null, menuLabel: "" },
+
+            // ── Tier 3: Panel toggles (icon-only) ────────────────────────────
+            {
+              key: "history",
+              priority: 3,
+              node: (
+                <button type="button" className={`btn btn--icon${showHistory ? " btn--icon--active" : ""}`} onClick={toggleHistory} title={t.editor.historyTitle}>
+                  ↺
+                </button>
+              ),
+              menuLabel: t.editor.history,
+              menuOnClick: toggleHistory,
+            },
+            {
+              key: "ai",
+              priority: 3,
+              node: (
+                <button type="button" className={`btn btn--icon${showAI ? " btn--icon--active" : ""}`} onClick={toggleAI} title={t.editor.aiTitle}>
+                  ✦
+                </button>
+              ),
+              menuLabel: t.editor.ai,
+              menuOnClick: toggleAI,
+            },
+            {
+              key: "share",
+              priority: 4,
+              node: (
+                <button type="button" className="btn btn--icon" onClick={openShare} title={t.editor.shareTitle}>
+                  ↗
+                </button>
+              ),
+              menuLabel: t.editor.share,
+              menuOnClick: openShare,
+            },
+            {
+              key: "backlinks",
+              priority: 4,
+              node: (
+                <button type="button" className={`btn btn--icon${showBacklinks ? " btn--icon--active" : ""}`} onClick={toggleBacklinks} title={t.backlinks.panelHint + " (⌘⇧B)"}>
+                  ↩
+                </button>
+              ),
+              menuLabel: t.backlinks.panelTitle,
+              menuOnClick: toggleBacklinks,
+            },
+            {
+              key: "template",
+              priority: 4,
+              node: (
+                <button type="button" className="btn btn--icon" onClick={openSaveAsTemplate} title={t.editor.templateTitle}>
+                  ⊞
+                </button>
+              ),
+              menuLabel: t.editor.template,
+              menuOnClick: openSaveAsTemplate,
+            },
+
+            // ── Separator before org tools ────────────────────────────────────
+            { key: "sep-org", priority: 5, isSeparator: true, node: null, menuLabel: "" },
+
+            // ── Tier 3: Org tools (icon-only) ────────────────────────────────
+            {
+              key: "prompt-star",
+              priority: 5,
+              node: (
+                <button
+                  type="button"
+                  className={`btn btn--icon${gist.category === "prompt" ? " btn--icon--active" : ""}`}
+                  onClick={async () => {
+                    if (gist.category === "prompt") {
+                      await api.setGistCategory(gist.id, "gist");
+                      notify(t.editor.promptRemoved, "success");
+                    } else {
+                      await api.setGistCategory(gist.id, "prompt");
+                      notify(t.editor.promptAdded, "success");
+                    }
+                    await useGistStore.getState().loadGists();
+                  }}
+                  title={gist.category === "prompt" ? t.editor.removeFromPrompt : t.editor.addToPrompt}
+                >
+                  {gist.category === "prompt" ? "★" : "☆"}
+                </button>
+              ),
+              menuLabel: gist.category === "prompt" ? t.editor.removeFromPrompt : t.editor.addToPrompt,
+              menuOnClick: async () => {
+                if (gist.category === "prompt") {
+                  await api.setGistCategory(gist.id, "gist");
+                  notify(t.editor.promptRemoved, "success");
+                } else {
+                  await api.setGistCategory(gist.id, "prompt");
+                  notify(t.editor.promptAdded, "success");
+                }
+                await useGistStore.getState().loadGists();
+              },
+            },
+            {
+              key: "prompt-lib",
+              priority: 5,
+              node: (
+                <button type="button" className="btn btn--icon" onClick={() => setShowPromptLib(true)} title={t.editor.libraryTitle}>
+                  ≡
+                </button>
+              ),
+              menuLabel: t.editor.library,
+              menuOnClick: () => setShowPromptLib(true),
+            },
+
+            // ── Always overflow: GitHub link + Delete ────────────────────────
+            {
+              key: "github-link",
+              priority: 6,
+              alwaysOverflow: !gist.local_only,
+              hidden: gist.local_only,
+              node: null,
+              menuLabel: t.editor.viewOnGitHub,
+              menuOnClick: () => {
+                import("@tauri-apps/plugin-shell").then(({ open }) => open(gist.html_url));
+              },
+            },
+            {
+              key: "delete",
+              priority: 6,
+              alwaysOverflow: true,
+              node: null,
+              menuLabel: t.editor.delete,
+              menuOnClick: () => {
+                if (confirm(t.editor.deleteConfirm))
+                  deleteGist(gist.id).catch((e) => notify(t.editor.deleteFailed + " " + String(e)));
+              },
+              menuDanger: true,
+            },
+          ];
+          return allItems;
+        })()}
+        />
+        </div>{/* editor__actions-wrap */}
       </div>
 
       {/* Local draft banner */}
@@ -1051,6 +1468,7 @@ export function Editor() {
             content={activeContent}
             runTrigger={runTrigger}
             onClose={() => setShowRun(false)}
+            gistId={gist.id}
           />
         )}
         {showHistory && (
@@ -1077,6 +1495,17 @@ export function Editor() {
             onClose={() => setShowAI(false)}
           />
         )}
+        {showBacklinks && (
+          <BacklinksPanel
+            gistId={gist.id}
+            gistName={gist.description?.trim() || gist.files[0]?.filename || gist.id.slice(0, 8)}
+            onOpen={(id) => {
+              useGistStore.getState().selectGist(id);
+              setShowBacklinks(false);
+            }}
+            onClose={() => setShowBacklinks(false)}
+          />
+        )}
       </div>
 
       {vimMode && <div className="editor__vim-status" ref={vimStatusRef} />}
@@ -1097,6 +1526,16 @@ export function Editor() {
             useGistStore.getState().selectGist(id);
           }}
           onClose={() => setShowPromptLib(false)}
+        />
+      )}
+      {aiSelection && (
+        <AISelectionModal
+          action={aiSelection.action}
+          code={aiSelection.code}
+          language={aiSelection.language}
+          onReplace={(text) => applyAiResult(aiSelection.range, text, false)}
+          onInsertBelow={(text) => applyAiResult(aiSelection.range, text, true)}
+          onClose={() => setAiSelection(null)}
         />
       )}
     </div>

@@ -7,6 +7,150 @@ use std::collections::HashMap;
 use crate::db::with_db;
 use crate::models::{CategoryCount, Gist, GistFile, Tag};
 
+// ── Wiki-links ([[gist-name]]) ──────────────────────────────────────────────
+
+/// Extract `[[...]]` wiki-link targets from a block of text.
+///
+/// Pure (no DB). Inner text may not span lines or contain nested brackets.
+/// Whitespace is trimmed, empties skipped, and results are returned in order
+/// of first appearance (callers dedupe case-insensitively).
+pub fn extract_wiki_links(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 1 < chars.len() {
+        if chars[i] == '[' && chars[i + 1] == '[' {
+            let mut j = i + 2;
+            let mut buf = String::new();
+            let mut closed = false;
+            while j < chars.len() {
+                let c = chars[j];
+                if c == ']' && j + 1 < chars.len() && chars[j + 1] == ']' {
+                    closed = true;
+                    break;
+                }
+                // Reject runaway/invalid spans (newlines or stray brackets).
+                if c == '\n' || c == '[' || c == ']' {
+                    break;
+                }
+                buf.push(c);
+                j += 1;
+            }
+            if closed {
+                let t = buf.trim();
+                if !t.is_empty() && t.chars().count() <= 200 {
+                    out.push(t.to_string());
+                }
+                i = j + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Replace the stored link set for `source_id` by re-scanning its description
+/// and file contents. Operates on the caller's connection (inside a write).
+fn reindex_links(
+    conn: &Connection,
+    source_id: &str,
+    description: &str,
+    contents: &[&str],
+) -> Result<()> {
+    conn.execute("DELETE FROM gist_links WHERE source_id = ?1", params![source_id])?;
+    let mut seen = std::collections::HashSet::new();
+    for text in std::iter::once(description).chain(contents.iter().copied()) {
+        for link in extract_wiki_links(text) {
+            if seen.insert(link.to_lowercase()) {
+                conn.execute(
+                    "INSERT OR IGNORE INTO gist_links(source_id, link_text) VALUES(?1, ?2)",
+                    params![source_id, link],
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Gists that reference `gist_id` via `[[...]]`, resolved dynamically by name.
+///
+/// A source backlinks to this gist when its stored `link_text` matches (case-
+/// insensitively) the gist's description or any of its filenames. Self-links
+/// are excluded. Results are ordered most-recently-updated first.
+pub fn get_backlinks(gist_id: &str) -> Result<Vec<Gist>> {
+    use rusqlite::types::Value;
+    with_db(|conn| {
+        let desc: String = conn.query_row(
+            "SELECT COALESCE(description, '') FROM gists WHERE id = ?1",
+            params![gist_id],
+            |r| r.get(0),
+        )?;
+
+        let mut names: Vec<String> = Vec::new();
+        if !desc.trim().is_empty() {
+            names.push(desc.trim().to_lowercase());
+        }
+        for f in load_files(conn, gist_id)? {
+            names.push(f.filename.to_lowercase());
+        }
+        names.sort();
+        names.dedup();
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT DISTINCT source_id FROM gist_links \
+             WHERE LOWER(link_text) IN ({placeholders}) AND source_id != ?"
+        );
+        let mut params_vec: Vec<Value> =
+            names.iter().map(|n| Value::Text(n.clone())).collect();
+        params_vec.push(Value::Text(gist_id.to_string()));
+
+        let source_ids: Vec<String> = conn
+            .prepare(&sql)?
+            .query_map(rusqlite::params_from_iter(params_vec.iter()), |r| r.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+
+        let mut out = Vec::new();
+        for sid in source_ids {
+            let mut stmt =
+                conn.prepare(&format!("SELECT {GIST_ROW} FROM gists WHERE id = ?1"))?;
+            let mut g = stmt.query_row(params![sid], |row| row_to_gist(conn, row))?;
+            g.files = load_files(conn, &g.id)?;
+            out.push(g);
+        }
+        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(out)
+    })
+}
+
+/// Resolve a `[[link_text]]` to the gist it refers to. Matches (case-insensitive)
+/// against description first, then any filename. Returns the first match or None.
+pub fn resolve_wiki_link(link_text: &str) -> Result<Option<Gist>> {
+    let lc = link_text.trim().to_lowercase();
+    with_db(|conn| {
+        let id: Option<String> = conn
+            .query_row(
+                "SELECT id FROM gists WHERE LOWER(TRIM(description)) = ?1
+                 UNION ALL
+                 SELECT gist_id FROM files WHERE LOWER(filename) = ?1
+                 LIMIT 1",
+                params![lc],
+                |r| r.get(0),
+            )
+            .ok();
+        let Some(id) = id else { return Ok(None) };
+        let mut stmt =
+            conn.prepare(&format!("SELECT {GIST_ROW} FROM gists WHERE id = ?1"))?;
+        let mut g = stmt.query_row(params![id], |row| row_to_gist(conn, row))?;
+        g.files = load_files(conn, &g.id)?;
+        Ok(Some(g))
+    })
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /// SELECT list aligned with `row_to_gist` column order (no table prefix).
@@ -119,6 +263,9 @@ fn upsert_gist_replace_all(conn: &Connection, gist: &Gist) -> Result<()> {
          VALUES(?1,?2,?3,?4)",
         params![gist.id, gist.description, filenames, content_text],
     )?;
+
+    let contents: Vec<&str> = gist.files.iter().map(|f| f.content.as_str()).collect();
+    reindex_links(conn, &gist.id, &gist.description, &contents)?;
 
     classify_and_persist(conn, gist)?;
     Ok(())
@@ -263,6 +410,9 @@ pub fn save_gist_draft(
             params![gist_id, description, filenames, content_text],
         )?;
 
+        let contents: Vec<&str> = files.iter().map(|f| f.content.as_str()).collect();
+        reindex_links(conn, gist_id, description, &contents)?;
+
         let mut g = Gist {
             id,
             description: description.to_string(),
@@ -355,6 +505,9 @@ pub fn create_local_draft(
             lang_group: "other".into(),
             pinned: false,
         };
+        let fc_refs: Vec<&str> = files.iter().map(|(_, c)| c.as_str()).collect();
+        reindex_links(conn, &id, description, &fc_refs)?;
+
         classify_and_persist(conn, &g)?;
         if let Ok((cat, lg)) = conn.query_row(
             "SELECT COALESCE(category,'gist'), COALESCE(lang_group,'other') FROM gists WHERE id=?1",
@@ -929,6 +1082,51 @@ pub fn embedding_counts(model: &str) -> Result<(usize, usize)> {
         )?;
         Ok((indexed, total))
     })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SimilarPair {
+    pub a: String,
+    pub b: String,
+    pub score: f32,
+}
+
+/// All gist pairs whose cosine similarity ≥ `threshold`, sorted descending and
+/// capped at `max_pairs`. O(n²) over stored vectors — fine for the typical
+/// few-hundred gists; callers should keep `max_pairs` modest.
+pub fn find_similar_pairs(
+    model: &str,
+    threshold: f32,
+    max_pairs: usize,
+) -> Result<Vec<SimilarPair>> {
+    let raw: Vec<(String, Vec<u8>)> = with_db(|conn| {
+        conn.prepare("SELECT gist_id, embedding FROM gist_embeddings WHERE model=?1")?
+            .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    })?;
+
+    let vecs: Vec<(String, Vec<f32>)> = raw
+        .into_iter()
+        .map(|(id, bytes)| (id, bytes_to_vec(&bytes)))
+        .collect();
+
+    let mut pairs: Vec<SimilarPair> = Vec::new();
+    for i in 0..vecs.len() {
+        for j in (i + 1)..vecs.len() {
+            let score = cosine_similarity(&vecs[i].1, &vecs[j].1);
+            if score >= threshold {
+                pairs.push(SimilarPair {
+                    a: vecs[i].0.clone(),
+                    b: vecs[j].0.clone(),
+                    score,
+                });
+            }
+        }
+    }
+    pairs.sort_by(|x, y| y.score.partial_cmp(&x.score).unwrap_or(std::cmp::Ordering::Equal));
+    pairs.truncate(max_pairs);
+    Ok(pairs)
 }
 
 /// Cosine similarity search. Returns top-N gist IDs with score > 0.10.

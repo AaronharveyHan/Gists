@@ -301,6 +301,7 @@ function GistItem({
       className={`gist-item ${selected ? "gist-item--selected" : ""} ${checked ? "gist-item--checked" : ""}`}
       onClick={() => selectMode ? onCheck(gist.id) : selectGist(gist.id)}
       onContextMenu={handleContextMenu}
+      style={{ "--lang-color": languageColor(primaryFile?.language ?? null) } as React.CSSProperties}
     >
       <div className="gist-item__header">
         {selectMode && (
@@ -774,6 +775,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         </button>
         <button
           className="sidebar__new"
+          data-testid="new-gist-btn"
           onClick={() => setShowNew(true)}
           title={t.sidebar.newGist}
         >
@@ -903,7 +905,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         )}
       </div>
 
-      <div className="sidebar__list" ref={listRef}>
+      <div className="sidebar__list" data-testid="gist-list" ref={listRef}>
         {/* ── Semantic mode ──────────────────────────────────────────────── */}
         {searchMode === "semantic" && searchQuery.trim() ? (
           <>
@@ -938,6 +940,17 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         ) : (
           /* ── Keyword / normal mode ───────────────────────────────────── */
           <>
+            {gists.length === 0 && syncStatus === "syncing" && (
+              <>
+                {[70, 50, 85, 55, 65].map((w, i) => (
+                  <div key={i} className="skeleton-item">
+                    <div className="skeleton skeleton-item__title" style={{ width: `${w}%` }} />
+                    <div className="skeleton skeleton-item__sub" style={{ width: `${w * 0.6}%` }} />
+                    <div className="skeleton skeleton-item__meta" style={{ width: `${w * 0.45}%` }} />
+                  </div>
+                ))}
+              </>
+            )}
             {filteredGists.length === 0 && syncStatus !== "syncing" && (
               <p className="sidebar__empty">
                 {isLocallyFiltered

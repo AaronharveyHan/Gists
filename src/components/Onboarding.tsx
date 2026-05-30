@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-shell";
-import { setToken, saveAiConfig } from "../api/tauri";
+import { setToken, saveAiConfig, saveSetting } from "../api/tauri";
 import { useGistStore } from "../store/useGistStore";
 import { useAuthStore } from "../store/useAuthStore";
 import { useT } from "../store/useI18nStore";
@@ -244,13 +244,17 @@ function StepAI({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) 
           {PROVIDERS.map((p, i) => (
             <button
               key={p.label}
-              className={`ob__provider-btn${providerIdx === i ? " ob__provider-btn--active" : ""}`}
+              className={`ob__provider-btn${providerIdx === i ? " ob__provider-btn--active" : ""}${p.local ? " ob__provider-btn--local" : ""}`}
               onClick={() => handleProvider(i)}
             >
               {p.label}
+              {p.local && <span className="ob__local-badge">{t.onboarding.localBadge}</span>}
             </button>
           ))}
         </div>
+        {prov.local && (
+          <div className="local-callout">{t.onboarding.localCallout}</div>
+        )}
       </div>
 
       {prov.docsUrl && (
@@ -258,12 +262,15 @@ function StepAI({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) 
           className="ob__inline-link ob__inline-link--block"
           onClick={() => open(prov.docsUrl)}
         >
-          {t.onboarding.getApiKeyFrom(prov.label)}
+          {prov.local ? t.onboarding.setupOllama : t.onboarding.getApiKeyFrom(prov.label)}
         </button>
       )}
 
       <div className="ob__field">
-        <label className="ob__label">{t.onboarding.apiKey}</label>
+        <label className="ob__label">
+          {t.onboarding.apiKey}
+          {prov.local && <span className="ob__local-badge ob__local-badge--inline">{t.onboarding.noKeyNeeded}</span>}
+        </label>
         <div className="ob__token-wrap">
           <input
             className="ob__input ob__input--mono"
@@ -329,7 +336,7 @@ function StepAI({ onNext, onSkip }: { onNext: () => void; onSkip: () => void }) 
         <button
           className="btn btn--primary"
           onClick={handleSave}
-          disabled={saving || !apiKey.trim()}
+          disabled={saving || (!apiKey.trim() && !prov.local)}
         >
           {saving ? t.onboarding.saving : t.onboarding.saveContinue}
         </button>
@@ -351,6 +358,8 @@ function StepReady({
 }) {
   const t = useT();
   const { gists } = useGistStore();
+  const [crashConsent, setCrashConsent] = useState(false);
+
   const shortcuts = [
     { key: "⌘P", label: t.onboarding.shortcutPalette },
     { key: "Alt+Space", label: t.onboarding.shortcutSearch },
@@ -359,6 +368,12 @@ function StepReady({
     { key: "⌘⇧H", label: t.onboarding.shortcutHistory },
     { key: "⌘⇧F", label: t.onboarding.shortcutSearchFiles },
   ];
+
+  const handleDone = () => {
+    saveSetting("error_reporting_enabled", crashConsent ? "true" : "false").catch(() => {});
+    onDone();
+  };
+
   return (
     <div className="ob__step ob__step--ready">
       <div className="ob__ready-check">✓</div>
@@ -396,7 +411,19 @@ function StepReady({
         </div>
       </div>
 
-      <button className="btn btn--primary ob__cta" onClick={onDone}>
+      <label className="ob__crash-consent">
+        <input
+          type="checkbox"
+          checked={crashConsent}
+          onChange={(e) => setCrashConsent(e.target.checked)}
+        />
+        <span className="ob__crash-consent__text">
+          {t.onboarding.crashConsentLabel}
+          <span className="ob__crash-consent__hint">{t.onboarding.crashConsentHint}</span>
+        </span>
+      </label>
+
+      <button className="btn btn--primary ob__cta" onClick={handleDone}>
         {t.onboarding.startUsing}
       </button>
     </div>
@@ -436,7 +463,7 @@ export function Onboarding() {
   const TOTAL_STEPS = 4;
 
   return (
-    <div className="ob">
+    <div className="ob" data-testid="onboarding">
       <div className="ob__card">
         <Steps current={step} total={TOTAL_STEPS} />
 

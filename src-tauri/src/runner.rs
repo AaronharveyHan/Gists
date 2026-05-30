@@ -2,7 +2,7 @@ use anyhow::Result;
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Window};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -24,6 +24,12 @@ pub struct RunDone {
     pub exit_code: i32,
     pub timed_out: bool,
     pub killed: bool,
+    /// Full captured stdout (≤100 KB, truncated with marker if exceeded).
+    pub stdout: String,
+    /// Full captured stderr (≤100 KB, truncated with marker if exceeded).
+    pub stderr: String,
+    /// Wall-clock duration in milliseconds.
+    pub duration_ms: i64,
 }
 
 struct Runner {
@@ -66,12 +72,12 @@ pub async fn run_code(
     run_id: String,
     filename: String,
     content: String,
-) -> Result<()> {
+) -> Result<RunDone> {
     let runner = detect_runner(&filename)
         .ok_or_else(|| anyhow::anyhow!("No runner available for '{}'", filename))?;
 
     // Write content to a temp file (same name → correct extension for the interpreter).
-    let tmp_dir = std::env::temp_dir().join(format!("gists-run-{}", &run_id[..8]));
+    let tmp_dir = std::env::temp_dir().join(format!("gists-run-{}", run_id));
     tokio::fs::create_dir_all(&tmp_dir).await?;
     let tmp_path = tmp_dir.join(&filename);
     tokio::fs::write(&tmp_path, content.as_bytes()).await?;
@@ -93,13 +99,12 @@ pub async fn run_code(
             };
             let _ = window.emit(
                 &format!("run-line-{}", run_id),
-                RunLine { text: msg, stream: "stderr".into() },
+                RunLine { text: msg.clone(), stream: "stderr".into() },
             );
-            let _ = window.emit(
-                &format!("run-done-{}", run_id),
-                RunDone { exit_code: -1, timed_out: false, killed: false },
-            );
-            return Ok(());
+            return Ok(RunDone {
+                exit_code: -1, timed_out: false, killed: false,
+                stdout: String::new(), stderr: msg, duration_ms: 0,
+            });
         }
     };
 
@@ -108,61 +113,85 @@ pub async fn run_code(
         RUNNING_PIDS.lock().unwrap().insert(run_id.clone(), pid);
     }
 
+    let start = std::time::Instant::now();
+
+    // Shared buffers for archiving — filled alongside live event emission.
+    let stdout_buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
     // Stream stdout/stderr from background tasks.
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
 
     let w1 = window.clone();
     let id1 = run_id.clone();
+    let buf1 = stdout_buf.clone();
     let t1 = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let _ = w1.emit(
                 &format!("run-line-{}", id1),
-                RunLine { text: line, stream: "stdout".into() },
+                RunLine { text: line.clone(), stream: "stdout".into() },
             );
+            buf1.lock().unwrap().push(line);
         }
     });
 
     let w2 = window.clone();
     let id2 = run_id.clone();
+    let buf2 = stderr_buf.clone();
     let t2 = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let _ = w2.emit(
                 &format!("run-line-{}", id2),
-                RunLine { text: line, stream: "stderr".into() },
+                RunLine { text: line.clone(), stream: "stderr".into() },
             );
+            buf2.lock().unwrap().push(line);
         }
     });
 
     // Wait with a 30-second timeout.
-    let done = match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
-        Ok(Ok(status)) => {
-            let exit_code = status.code().unwrap_or(-1);
-            // code() is None on Unix when killed by signal
-            let killed = status.code().is_none();
-            RunDone { exit_code, timed_out: false, killed }
-        }
-        Ok(Err(_)) => RunDone { exit_code: -1, timed_out: false, killed: false },
-        Err(_) => {
-            // Timed out: kill the process, then wait for it to exit.
-            if pid != 0 { kill_pid(pid); }
-            let _ = child.wait().await;
-            RunDone { exit_code: -1, timed_out: true, killed: false }
-        }
-    };
+    let (exit_code, timed_out, killed) =
+        match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+            Ok(Ok(status)) => {
+                let ec = status.code().unwrap_or(-1);
+                // code() is None on Unix when killed by signal
+                let kl = status.code().is_none();
+                (ec, false, kl)
+            }
+            Ok(Err(_)) => (-1, false, false),
+            Err(_) => {
+                // Timed out: kill the process, then wait for it to exit.
+                if pid != 0 { kill_pid(pid); }
+                let _ = child.wait().await;
+                (-1, true, false)
+            }
+        };
 
     // Wait for I/O tasks to drain any buffered output.
     let _ = tokio::join!(t1, t2);
 
+    let duration_ms = start.elapsed().as_millis() as i64;
+
+    const MAX_BYTES: usize = 102_400;
+    let mut stdout_str = stdout_buf.lock().unwrap().join("\n");
+    let mut stderr_str = stderr_buf.lock().unwrap().join("\n");
+    if stdout_str.len() > MAX_BYTES {
+        stdout_str.truncate(MAX_BYTES);
+        stdout_str.push_str("\n…[truncated]");
+    }
+    if stderr_str.len() > MAX_BYTES {
+        stderr_str.truncate(MAX_BYTES);
+        stderr_str.push_str("\n…[truncated]");
+    }
+
     RUNNING_PIDS.lock().unwrap().remove(&run_id);
-    let _ = window.emit(&format!("run-done-{}", run_id), done);
 
     // Best-effort cleanup of the temp directory.
     let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
 
-    Ok(())
+    Ok(RunDone { exit_code, timed_out, killed, stdout: stdout_str, stderr: stderr_str, duration_ms })
 }
 
 /// Signal a running process to stop. The run_code future will detect the exit

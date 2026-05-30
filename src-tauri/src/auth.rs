@@ -43,6 +43,28 @@ pub fn keyring_delete() {
     }
 }
 
+/// Store a token under an arbitrary keychain key (for multi-account support).
+pub fn keyring_set_for(account_key: &str, token: &str) {
+    if let Ok(entry) = keyring::Entry::new(APP_IDENTIFIER, account_key) {
+        let _ = entry.set_password(token);
+    }
+}
+
+/// Read a token by arbitrary keychain key.
+pub fn keyring_get_for(account_key: &str) -> Option<String> {
+    keyring::Entry::new(APP_IDENTIFIER, account_key)
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .filter(|t| !t.is_empty())
+}
+
+/// Delete a token by arbitrary keychain key.
+pub fn keyring_delete_for(account_key: &str) {
+    if let Ok(entry) = keyring::Entry::new(APP_IDENTIFIER, account_key) {
+        let _ = entry.delete_password();
+    }
+}
+
 /// Load the saved GitHub token: OS keychain first, then the SQLite `settings`
 /// fallback. The DB must be initialized (`db::init_db`) for the fallback to work.
 pub fn load_token() -> Option<String> {

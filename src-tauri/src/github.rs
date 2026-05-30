@@ -321,3 +321,18 @@ pub async fn validate_token(token: &str) -> Result<String> {
     let json: serde_json::Value = resp.json().await?;
     Ok(json["login"].as_str().unwrap_or("").to_string())
 }
+
+/// Fetch login + avatar_url for the token owner in one API call.
+pub async fn get_user_profile(token: &str) -> Result<(String, Option<String>)> {
+    let client = build_client(token)?;
+    let json: serde_json::Value = client
+        .get(&format!("{}/user", BASE_URL))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let login = json["login"].as_str().unwrap_or("").to_string();
+    let avatar = json["avatar_url"].as_str().map(|s| s.to_string());
+    Ok((login, avatar))
+}

@@ -35,6 +35,8 @@ fn main() {
             }
         })
         .setup(|app| {
+            #[cfg(debug_assertions)]
+            app.handle().plugin(tauri_plugin_wdio::init())?;
             let app_dir = app
                 .path()
                 .app_data_dir()
@@ -44,6 +46,45 @@ fn main() {
             let dir_str = app_dir.to_string_lossy().to_string();
 
             db::init_db(&dir_str).map_err(|e| format!("Failed to initialize database: {e}"))?;
+
+            let sentry_enabled = db::get_setting("error_reporting_enabled")
+                .ok()
+                .flatten()
+                .map(|v| v == "true")
+                .unwrap_or(false);
+            gists_client::telemetry::init(sentry_enabled);
+
+            // Migrate legacy single token → accounts table (one-time, idempotent).
+            if let Ok(accounts) = gists_client::db::list_accounts() {
+                if accounts.is_empty() {
+                    let legacy_token = gists_client::auth::keyring_get()
+                        .or_else(|| {
+                            gists_client::db::get_setting("token")
+                                .ok()
+                                .flatten()
+                                .filter(|t| !t.is_empty())
+                        });
+                    if let Some(token) = legacy_token {
+                        let login = gists_client::db::get_setting("gh_login")
+                            .ok()
+                            .flatten()
+                            .filter(|v| !v.is_empty());
+                        if let Ok(id) = gists_client::db::create_account(
+                            "Personal",
+                            login.as_deref(),
+                            None,
+                        ) {
+                            let key = format!("gists_client_acct_{}", id);
+                            gists_client::auth::keyring_set_for(&key, &token);
+                            let _ = gists_client::db::set_active_account(id);
+                            let _ = gists_client::db::set_setting(
+                                &format!("token_acct_{}", id),
+                                &token,
+                            );
+                        }
+                    }
+                }
+            }
 
             let saved_token = commands::keyring_get().or_else(|| {
                 db::get_setting("token").ok().flatten().filter(|t| !t.is_empty())
@@ -210,6 +251,8 @@ fn main() {
             commands::get_embedding_status,
             commands::semantic_search,
             commands::start_embedding_indexer,
+            commands::ai_complete,
+            commands::find_duplicate_gists,
             commands::list_collections,
             commands::list_collection_counts,
             commands::create_collection,
@@ -219,6 +262,16 @@ fn main() {
             commands::remove_gist_from_collection,
             commands::list_collection_gists,
             commands::get_gist_collections,
+            commands::get_backlinks,
+            commands::resolve_wiki_link,
+            commands::capture_error,
+            commands::merge_gist_conflict,
+            commands::list_accounts,
+            commands::add_account,
+            commands::remove_account,
+            commands::switch_account,
+            commands::list_run_history,
+            commands::diff_runs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

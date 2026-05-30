@@ -17,7 +17,7 @@ use gists_client::github::FetchGistOutcome;
 
 // Keychain helpers live in `gists_client::auth` so the desktop app and the `gist`
 // CLI share one keychain entry. Re-export `keyring_get` for `main.rs`.
-use gists_client::auth::{keyring_delete, keyring_set};
+use gists_client::auth::{keyring_delete, keyring_set, keyring_delete_for, keyring_set_for, keyring_get_for};
 pub use gists_client::auth::keyring_get;
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -333,6 +333,177 @@ pub fn get_setting(key: String) -> Result<Option<String>, String> {
 #[tauri::command]
 pub fn save_setting(key: String, value: String) -> Result<(), String> {
     db::set_setting(&key, &value).map_err(|e| e.to_string())
+}
+
+// ── Error reporting command ───────────────────────────────────────────────────
+
+/// Forward a frontend error message to Sentry (backend side).
+/// Fire-and-forget: always succeeds even if reporting is disabled.
+#[tauri::command]
+pub fn capture_error(message: String, context: Option<String>) -> Result<(), String> {
+    let full = match context {
+        Some(ctx) => format!("{message} | {ctx}"),
+        None => message,
+    };
+    gists_client::telemetry::capture_message(&full);
+    Ok(())
+}
+
+// ── Multi-account ─────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn list_accounts() -> Result<Vec<gists_client::models::Account>, String> {
+    db::list_accounts().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_account(
+    name: String,
+    token: String,
+    state: State<'_, AppState>,
+) -> Result<gists_client::models::Account, String> {
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        return Err("Token cannot be empty".into());
+    }
+    let known_prefix = token.starts_with("ghp_")
+        || token.starts_with("ghu_")
+        || token.starts_with("gho_")
+        || token.starts_with("ghs_")
+        || token.starts_with("github_pat_");
+    if !known_prefix || token.len() < 20 {
+        return Err("Invalid token format".into());
+    }
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Account name cannot be empty".into());
+    }
+
+    let (login, avatar_url) = github::get_user_profile(&token)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let id = db::create_account(&name, Some(&login), avatar_url.as_deref())
+        .map_err(|e| e.to_string())?;
+    let token_key = format!("gists_client_acct_{}", id);
+
+    // Store in keychain; DB entry as fallback.
+    keyring_set_for(&token_key, &token);
+    let _ = db::set_setting(&format!("token_acct_{}", id), &token);
+
+    // If this is the first account, make it active and load into AppState.
+    let accounts = db::list_accounts().map_err(|e| e.to_string())?;
+    if accounts.len() == 1 {
+        let _ = db::set_active_account(id);
+        *state.token.lock().await = Some(token.clone());
+        let _ = db::set_setting("gh_login", &login);
+    }
+
+    db::list_accounts()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|a| a.id == id)
+        .ok_or_else(|| "Account not found after creation".to_string())
+}
+
+#[tauri::command]
+pub async fn remove_account(id: i64) -> Result<(), String> {
+    let accounts = db::list_accounts().map_err(|e| e.to_string())?;
+    if accounts.len() <= 1 {
+        return Err("Cannot remove the last account".into());
+    }
+    if let Some(acc) = accounts.iter().find(|a| a.id == id) {
+        keyring_delete_for(&acc.token_key);
+        let _ = db::set_setting(&format!("token_acct_{}", id), "");
+    }
+    db::delete_account(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn switch_account(
+    id: i64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let accounts = db::list_accounts().map_err(|e| e.to_string())?;
+    let acc = accounts
+        .iter()
+        .find(|a| a.id == id)
+        .ok_or("Account not found")?;
+
+    let token = keyring_get_for(&acc.token_key)
+        .or_else(|| {
+            db::get_setting(&format!("token_acct_{}", id))
+                .ok()
+                .flatten()
+                .filter(|t| !t.is_empty())
+        })
+        .ok_or("No token found for this account — please re-add it")?;
+
+    *state.token.lock().await = Some(token.clone());
+    db::set_active_account(id).map_err(|e| e.to_string())?;
+
+    // Keep legacy settings in sync so the rest of the app picks up the change.
+    let _ = db::set_setting("token", &token);
+    if let Some(login) = &acc.login {
+        let _ = db::set_setting("gh_login", login);
+    }
+    Ok(())
+}
+
+// ── Three-way merge ───────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn merge_gist_conflict(
+    gist_id: String,
+    local_files: Vec<(String, String)>,
+    remote_files: Vec<(String, String)>,
+) -> Result<gists_client::models::MergeOutcome, String> {
+    use gists_client::diff::three_way_merge;
+    use gists_client::models::{MergedFile, MergeOutcome};
+    use std::collections::HashMap;
+
+    let base = gists_client::cache::get_remote_snapshot(&gist_id)
+        .map_err(|e| e.to_string())?;
+
+    let local_map: HashMap<String, String> = local_files.into_iter().collect();
+    let remote_map: HashMap<String, String> = remote_files.into_iter().collect();
+
+    // Union of all filenames across base, local, remote.
+    let mut all_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    all_names.extend(base.keys().cloned());
+    all_names.extend(local_map.keys().cloned());
+    all_names.extend(remote_map.keys().cloned());
+
+    let mut files: Vec<MergedFile> = Vec::new();
+    let mut any_conflict = false;
+
+    for name in all_names {
+        let b = base.get(&name).map(|s| s.as_str()).unwrap_or("");
+        let l = local_map.get(&name).map(|s| s.as_str());
+        let r = remote_map.get(&name).map(|s| s.as_str());
+
+        let (content, had_conflict) = match (l, r) {
+            (Some(lc), Some(rc)) => {
+                let result = three_way_merge(b, lc, rc);
+                (result.content, result.had_conflict)
+            }
+            // File only in local — keep it (new local file).
+            (Some(lc), None) if b.is_empty() => (lc.to_string(), false),
+            // Remote deleted, local still has it — keep local, flag conflict.
+            (Some(lc), None) => (lc.to_string(), true),
+            // Only in remote — take it.
+            (None, Some(rc)) => (rc.to_string(), false),
+            // Only in base (deleted by both?) — omit.
+            (None, None) => continue,
+        };
+
+        if had_conflict {
+            any_conflict = true;
+        }
+        files.push(MergedFile { filename: name, content, had_conflict });
+    }
+
+    Ok(MergeOutcome { files, any_conflict })
 }
 
 // ── Diff commands ─────────────────────────────────────────────────────────────
@@ -818,6 +989,42 @@ pub async fn semantic_search(
         .map_err(|e| e.to_string())
 }
 
+/// One-shot AI completion (non-streaming) — used by the library organizer to
+/// generate descriptions/tags in batch.
+#[tauri::command]
+pub async fn ai_complete(messages: Vec<AiMessage>) -> Result<String, String> {
+    let base_url = db::get_setting("ai_base_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_BASE_URL.to_string());
+    let api_key = db::get_setting("ai_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let model = db::get_setting("ai_model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_MODEL.to_string());
+
+    if api_key.is_empty() {
+        return Err("AI API key not configured. Open Settings → AI tab.".to_string());
+    }
+
+    crate::ai::complete(&base_url, &api_key, &model, &messages)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Find near-duplicate gists using the stored embeddings (cosine ≥ threshold).
+#[tauri::command]
+pub fn find_duplicate_gists(threshold: f32) -> Result<Vec<cache::SimilarPair>, String> {
+    let model = db::get_setting("ai_embedding_model")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+    cache::find_similar_pairs(&model, threshold, 100).map_err(|e| e.to_string())
+}
+
 /// Spawn a background task that generates and stores embeddings for all
 /// stale gists. Emits `embedding-progress` events to the window.
 /// No-op if AI key is not configured.
@@ -1013,6 +1220,7 @@ pub fn vscode_snippets_import(
 #[tauri::command]
 pub async fn run_code(
     run_id: String,
+    gist_id: String,
     filename: String,
     content: String,
     window: tauri::Window,
@@ -1020,18 +1228,54 @@ pub async fn run_code(
     // Spawn as a background task so the command returns immediately
     // and the frontend receives output via events.
     tokio::spawn(async move {
-        if let Err(e) = gists_client::runner::run_code(window.clone(), run_id.clone(), filename, content).await {
-            let _ = window.emit(
-                &format!("run-line-{}", run_id),
-                gists_client::runner::RunLine { text: e.to_string(), stream: "stderr".into() },
+        let done = match gists_client::runner::run_code(
+            window.clone(), run_id.clone(), filename.clone(), content,
+        ).await {
+            Ok(d) => d,
+            Err(e) => {
+                let _ = window.emit(
+                    &format!("run-line-{}", run_id),
+                    gists_client::runner::RunLine { text: e.to_string(), stream: "stderr".into() },
+                );
+                gists_client::runner::RunDone {
+                    exit_code: -1, timed_out: false, killed: false,
+                    stdout: String::new(), stderr: e.to_string(), duration_ms: 0,
+                }
+            }
+        };
+
+        // Persist run to DB (best-effort: skip for local-only / unknown gists).
+        if !gist_id.is_empty() {
+            let _ = gists_client::db::insert_run(
+                &gist_id, &filename,
+                done.exit_code, &done.stdout, &done.stderr,
+                done.duration_ms, done.timed_out, done.killed,
             );
-            let _ = window.emit(
-                &format!("run-done-{}", run_id),
-                gists_client::runner::RunDone { exit_code: -1, timed_out: false, killed: false },
-            );
+            let _ = gists_client::db::delete_old_runs(&gist_id, &filename, 50);
         }
+
+        // Emit run-done after DB write so the frontend can immediately fetch history.
+        let _ = window.emit(&format!("run-done-{}", run_id), &done);
     });
     Ok(())
+}
+
+#[tauri::command]
+pub fn list_run_history(
+    gist_id: String,
+    filename: String,
+) -> Result<Vec<gists_client::models::RunRecord>, String> {
+    gists_client::db::list_run_history(&gist_id, &filename, 20)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn diff_runs(id_a: i64, id_b: i64) -> Result<String, String> {
+    let a = gists_client::db::get_run(id_a).map_err(|e| e.to_string())?;
+    let b = gists_client::db::get_run(id_b).map_err(|e| e.to_string())?;
+    // b is older run, a is newer — diff(older→newer) so additions show as green.
+    let diff = gists_client::diff::unified_diff(&b.stdout, &a.stdout, &a.filename);
+    Ok(diff)
 }
 
 #[tauri::command]
@@ -1105,4 +1349,18 @@ pub fn list_collection_gists(collection_id: String) -> Result<Vec<Gist>, String>
 #[tauri::command]
 pub fn get_gist_collections(gist_id: String) -> Result<Vec<Collection>, String> {
     cache::get_gist_collections(&gist_id).map_err(|e| e.to_string())
+}
+
+// ── Wiki-links ────────────────────────────────────────────────────────────────
+
+/// Return gists that contain [[link_text]] matching this gist's description or filenames.
+#[tauri::command]
+pub fn get_backlinks(gist_id: String) -> Result<Vec<Gist>, String> {
+    cache::get_backlinks(&gist_id).map_err(|e| e.to_string())
+}
+
+/// Resolve a [[link_text]] to the gist it refers to (by description or filename).
+#[tauri::command]
+pub fn resolve_wiki_link(link_text: String) -> Result<Option<Gist>, String> {
+    cache::resolve_wiki_link(&link_text).map_err(|e| e.to_string())
 }

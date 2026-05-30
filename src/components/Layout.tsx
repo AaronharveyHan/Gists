@@ -9,6 +9,7 @@ import { CommandPalette } from "./CommandPalette";
 import { ImportModal } from "./ImportModal";
 import { ContentSearch } from "./ContentSearch";
 import { StatsPanel } from "./StatsPanel";
+import { LibraryCleanup } from "./LibraryCleanup";
 import { ShortcutsModal } from "./ShortcutsModal";
 import { TemplatesModal } from "./TemplatesModal";
 import { NewGistModal } from "./Editor";
@@ -37,6 +38,7 @@ export function Layout() {
   const [showSettings, setShowSettings] = useState(false);
   const [showPalette, setShowPalette] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [showCleanup, setShowCleanup] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
@@ -139,6 +141,7 @@ export function Layout() {
           onShortcuts={() => setShowShortcuts(true)}
           onTemplates={() => setShowTemplates(true)}
           onGraph={() => setShowGraph(true)}
+          onCleanup={() => setShowCleanup(true)}
         />
       )}
       {update && !updateDismissed && (
@@ -191,6 +194,12 @@ export function Layout() {
         <ImportModal filePath={importPath} onClose={() => setImportPath(null)} />
       )}
       {showStats && <StatsPanel onClose={() => setShowStats(false)} />}
+      {showCleanup && (
+        <LibraryCleanup
+          onClose={() => setShowCleanup(false)}
+          onOpenGist={(id) => { setShowCleanup(false); selectGist(id); }}
+        />
+      )}
       {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
       {showTemplates && (
         <TemplatesModal
