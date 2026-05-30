@@ -32,7 +32,7 @@ jobs:
       # 4. Rust build cache
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: '. -> target'
 
       # 5. Linux system dependencies (WebKitGTK + WebDriver)
       #    webkit2gtk-driver ships WebKitWebDriver (the W3C WebDriver binary for GTK WebKit).
@@ -62,8 +62,7 @@ jobs:
       # 8. Build the Tauri app in debug mode
       #    Debug builds are faster and include the WDIO plugin.
       - name: Build Tauri app (debug)
-        run: cargo build
-        working-directory: src-tauri
+        run: cargo build -p gists-client
 
       # 9. Run E2E tests under a virtual display (required for WebKitGTK on Linux)
       - name: Run E2E tests

@@ -4,7 +4,7 @@ import * as fs from "fs";
 
 // Resolve debug binary path based on platform
 function appBinaryPath(): string {
-  const base = path.resolve(__dirname, "src-tauri/target/debug");
+  const base = path.resolve(__dirname, "target/debug");
   if (process.platform === "win32") return path.join(base, "gists-client.exe");
   return path.join(base, "gists-client");
 }
@@ -87,6 +87,7 @@ export const config = {
     [
       "@wdio/tauri-service",
       {
+        driverProvider: "official" as const,
         // Disable broken PowerShell-based auto-install on Windows.
         // We find the driver that ships with Edge instead (see resolveWindowsDriver).
         autoInstallTauriDriver: !windowsDriver,

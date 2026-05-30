@@ -34,7 +34,7 @@ jobs:
       # 4. 缓存 Rust 编译产物（加速后续构建）
       - uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: '. -> target'
 
       # 5. Linux 系统依赖（仅在 ubuntu 上执行）
       #    Tauri v2 改用 WebKitGTK 4.1 + libsoup-3（v1 是 4.0 + libsoup2）。
@@ -60,14 +60,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # 7. 先编译 gist CLI —— 必须在 tauri build 打包之前。
-      #    原因：gist 是 src-tauri/Cargo.toml 里的第二个 [[bin]]，Tauri 打包器
-      #    会枚举包内所有二进制并尝试把它们放进 .deb / .msi。若此时 target/release/gist
-      #    不存在，deb 的文件拷贝与 Windows 的 light.exe 都会失败。提前构建即可让
-      #    打包阶段找到它（顺带把 CLI 一起装进安装包，桌面用户安装后即获得 gist 命令）。
-      - name: Build gist CLI (before bundling)
-        run: cargo build --release --features cli --bin gist
-        working-directory: src-tauri
+      # 7. 编译 gist CLI（独立 workspace crate，产物在根目录 target/release/gist）
+      - name: Build gist CLI
+        run: cargo build -p gist --release
 
       # 8. 编译 + 创建 Release + 上传产物
       #    tauri-action 会：
@@ -123,14 +118,14 @@ jobs:
             ubuntu-22.04) OUT=gist-linux-x86_64 ;;
             *)            OUT=gist-unknown ;;
           esac
-          cp src-tauri/target/release/gist "$OUT"
+          cp target/release/gist "$OUT"
           echo "CLI_ASSET=$OUT" >> "$GITHUB_ENV"
 
       - name: Stage CLI binary (Windows)
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         run: |
-          Copy-Item src-tauri\target\release\gist.exe gist-windows-x86_64.exe
+          Copy-Item target\release\gist.exe gist-windows-x86_64.exe
           "CLI_ASSET=gist-windows-x86_64.exe" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       # 10. 上传 CLI 到同一个 draft release（tauri-action 已创建好，按 tag 查找）
