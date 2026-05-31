@@ -4,14 +4,17 @@
 import { skipOnboardingIfShown, invoke, countElements } from "./helpers/app";
 
 describe("Markdown Preview", () => {
+  let previewGistId: string;
+
   before(async () => {
     await skipOnboardingIfShown();
     // Create a gist with markdown content including a wiki-link
-    await invoke("create_local_gist", {
+    const previewGist = await invoke<{ id: string }>("create_local_gist", {
       description: "MD Preview Test",
       public: false,
       files: [["preview.md", "# Hello\n\nThis links to [[Another Gist]].\n\n```js\nconsole.log('hi');\n```"]],
     });
+    previewGistId = previewGist.id;
     // Create the target gist so the wiki-link resolves
     await invoke("create_local_gist", {
       description: "Another Gist",
@@ -25,20 +28,25 @@ describe("Markdown Preview", () => {
     // the items are fetched async from SQLite after the container mounts.
     await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
     await browser.waitUntil(
-      async () => (await countElements('.gist-item')) >= 1,
+      async () => (await countElements('.gist-item')) >= 2,
       { timeout: 30000, interval: 500 }
     );
   });
 
   it("selects the markdown gist and shows editor", async () => {
-    // Find the gist item by its description or first available
-    await browser.waitUntil(
-      async () => (await countElements('.gist-item')) > 0,
-      { timeout: 8000 }
-    );
-    const items = await browser.$$('.gist-item');
-    const mdItem = items[0];
-    await mdItem.click();
+    // Find the MD Preview Test gist by its ID so we always get the right one
+    // regardless of sort order (default is newest-updated-first).
+    let found = false;
+    for (const item of await browser.$$('.gist-item')) {
+      const id = await item.getAttribute('data-gist-id');
+      if (id === previewGistId) {
+        await item.click();
+        found = true;
+        break;
+      }
+    }
+    expect(found).toBe(true);
+
     const editor = await browser.$('.monaco-editor');
     await editor.waitForExist({ timeout: 8000 });
     expect(await editor.isExisting()).toBe(true);
