@@ -55,9 +55,7 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # 7. Build the frontend (produces dist/ that tauri-build embeds into the binary)
-      #    Without this step the debug binary uses devUrl=http://localhost:1420 which
-      #    has no server behind it in CI, leaving the WebView blank.
+      # 7. Build the frontend (produces dist/ needed by vite preview below)
       - name: Build frontend
         run: npm run build
 
@@ -65,18 +63,26 @@ jobs:
       - name: Install tauri-driver
         run: cargo install tauri-driver --version "^2"
 
-      # 9. Build the Tauri app in debug mode with embedded frontend
-      #    --features custom-protocol makes the app serve dist/ via the tauri:// protocol
-      #    instead of relying on a live Vite dev server.
-      #    Debug builds still include the WDIO plugin (cfg(debug_assertions) is true).
+      # 9. Build the Tauri app in debug mode
+      #    The debug binary uses devUrl=http://localhost:1420 (from tauri.conf.json).
+      #    We serve that URL with "vite preview" in the next step instead of embedding
+      #    the frontend via --features custom-protocol, because tauri:// pages block
+      #    WebKitWebDriver JavaScript execution (all commands hang forever).
       - name: Build Tauri app (debug)
-        run: cargo build -p gists-client --features custom-protocol
+        run: cargo build -p gists-client
         env:
           CARGO_TARGET_DIR: src-tauri/target
 
-      # 9. Run E2E tests under a virtual display (required for WebKitGTK on Linux)
+      # 10. Run E2E tests under a virtual display (required for WebKitGTK on Linux)
+      #     "vite preview" serves dist/ on port 1420 so the Tauri devUrl is reachable.
       - name: Run E2E tests
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:e2e
+        run: |
+          npx vite preview --port 1420 &
+          VITE_PID=$!
+          # Wait up to 30 s for the preview server to accept connections
+          timeout 30 bash -c 'until curl -sf http://localhost:1420 > /dev/null; do sleep 1; done'
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:e2e
+          kill "$VITE_PID" 2>/dev/null || true
         env:
           # Prevent WebKitGTK from trying to connect to a real D-Bus session
           DBUS_SESSION_BUS_ADDRESS: /dev/null
