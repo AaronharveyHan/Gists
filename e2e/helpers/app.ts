@@ -22,6 +22,16 @@ export async function invoke<T = unknown>(
  * Call this at the start of any test that requires the main UI.
  */
 export async function skipOnboardingIfShown(): Promise<void> {
+  // Wait for the app to reach a known state (onboarding OR main UI) before deciding
+  await browser.waitUntil(
+    async () => {
+      const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
+      const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
+      return hasOnboarding || hasGistList;
+    },
+    { timeout: 15000, interval: 300, timeoutMsg: "App did not reach a known state (onboarding or main UI)" }
+  );
+
   const onboarding = await browser.$('[data-testid="onboarding"]');
   const isShown = await onboarding.isExisting();
   if (!isShown) return;
@@ -30,7 +40,7 @@ export async function skipOnboardingIfShown(): Promise<void> {
   await skipBtn.waitForDisplayed({ timeout: 5000 });
   await skipBtn.click();
 
-  await browser.$('[data-testid="gist-list"]').waitForExist({ timeout: 10000 });
+  await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 10000 });
 }
 
 /** Wait until the gist list is rendered (possibly empty). */

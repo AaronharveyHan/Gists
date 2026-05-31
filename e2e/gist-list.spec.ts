@@ -16,11 +16,13 @@ describe("Gist List", () => {
 
   it("shows the new-gist button in the sidebar header", async () => {
     const newBtn = await browser.$('[data-testid="new-gist-btn"]');
+    await newBtn.waitForDisplayed({ timeout: 5000 });
     expect(await newBtn.isDisplayed()).toBe(true);
   });
 
   it("clicking new-gist button opens the creation form", async () => {
     const newBtn = await browser.$('[data-testid="new-gist-btn"]');
+    await newBtn.waitForDisplayed({ timeout: 5000 });
     await newBtn.click();
 
     // A form / input for naming the new gist should appear

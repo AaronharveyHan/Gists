@@ -6,6 +6,8 @@ import { skipOnboardingIfShown } from "./helpers/app";
 describe("Settings Modal", () => {
   before(async () => {
     await skipOnboardingIfShown();
+    // Ensure the toolbar is fully rendered before any test tries to interact with it
+    await browser.$('[data-testid="settings-btn"]').waitForExist({ timeout: 10000 });
   });
 
   it("settings button is visible in the toolbar", async () => {
