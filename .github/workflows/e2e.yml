@@ -89,6 +89,9 @@ jobs:
           for spec in $(find e2e -name '*.spec.ts' | sort); do
             xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
               dbus-run-session -- npx wdio run wdio.conf.ts --spec "$spec" || EXIT=$?
+            # Kill any lingering Tauri process so port 4445 is free for the next spec
+            pkill -f 'target/debug/gists-client' 2>/dev/null || true
+            sleep 1
           done
 
           kill "$VITE_PID" 2>/dev/null || true

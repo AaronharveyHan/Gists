@@ -15,7 +15,10 @@ describe("Editor", () => {
     // invoke() writes directly to the DB; reload so the React app fetches the
     // newly-created gist on mount and it appears in the gist list.
     await browser.refresh();
+    // Wait for the gist-list container first, then for the actual items —
+    // the items are fetched async from SQLite after the container mounts.
     await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
+    await browser.$('.gist-item').waitForExist({ timeout: 30000 });
   });
 
   it("selecting a gist shows the Monaco editor", async () => {

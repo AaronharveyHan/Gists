@@ -21,7 +21,13 @@ describe("Markdown Preview", () => {
     // invoke() writes directly to the DB; reload so the React app fetches the
     // newly-created gists on mount.
     await browser.refresh();
+    // Wait for the gist-list container first, then for the actual items —
+    // the items are fetched async from SQLite after the container mounts.
     await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
+    await browser.waitUntil(
+      async () => (await countElements('.gist-item')) >= 1,
+      { timeout: 30000, interval: 500 }
+    );
   });
 
   it("selects the markdown gist and shows editor", async () => {
