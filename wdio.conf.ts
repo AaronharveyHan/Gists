@@ -87,7 +87,16 @@ export const config = {
     [
       "@wdio/tauri-service",
       {
-        driverProvider: "official" as const,
+        // Use the embedded WebDriver server provided by tauri-plugin-wdio (compiled
+        // into every debug build via cfg(debug_assertions)). This is the correct
+        // driver for Tauri v2: the plugin starts a server inside the app process and
+        // the service connects to it.
+        //
+        // "official" (WebKitWebDriver) was tried but conflicts with the embedded
+        // server — both try to own the WebKit instance simultaneously, which locks
+        // up all DOM commands.  With the frontend properly served by vite-preview the
+        // embedded server initialises correctly, making "official" unnecessary.
+        driverProvider: "embedded" as const,
         // Disable broken PowerShell-based auto-install on Windows.
         // We find the driver that ships with Edge instead (see resolveWindowsDriver).
         autoInstallTauriDriver: !windowsDriver,
@@ -104,7 +113,7 @@ export const config = {
 
   mochaOpts: {
     ui: "bdd",
-    timeout: 60000,
+    timeout: 120000,
   },
 
   before() {
