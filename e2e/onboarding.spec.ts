@@ -9,15 +9,31 @@ import { countElements } from "./helpers/app";
 describe("Onboarding", () => {
   before(async () => {
     // All spec files share the same temp dir (and thus the same localStorage).
-    // If any earlier spec navigated to local mode, 'localMode:true' is persisted
-    // and the app skips onboarding on the next launch.
-    // Clear the auth key and reload so this suite always starts at the onboarding screen.
+    // If any earlier spec navigated to local mode, 'localMode:true' is persisted and the app
+    // skips onboarding on the next launch. We clear that key and reload so this suite
+    // always starts at the onboarding screen regardless of spec execution order.
+    //
+    // We MUST wait for the page to be fully loaded before calling browser.execute()
+    // because WebKitGTK blocks script injection on a blank / partially-loaded page.
+    await browser.waitUntil(
+      async () => {
+        const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
+        const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
+        return hasOnboarding || hasGistList;
+      },
+      { timeout: 30000, interval: 500, timeoutMsg: "App did not load before onboarding reset" }
+    );
+
+    // If we're already on the onboarding screen we're done.
+    if (await browser.$('[data-testid="onboarding"]').isExisting()) return;
+
+    // Main UI is showing (localMode was persisted). Clear it and reload.
     await browser.execute(() => {
       localStorage.removeItem("gists-client-auth");
     });
     await browser.refresh();
-    // Wait for the onboarding screen to appear after the reload
-    await browser.$('[data-testid="onboarding"]').waitForDisplayed({ timeout: 12000 });
+    // Wait for onboarding to appear after the reload
+    await browser.$('[data-testid="onboarding"]').waitForDisplayed({ timeout: 15000 });
   });
 
   it("displays the onboarding screen on first launch", async () => {

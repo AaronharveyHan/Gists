@@ -55,14 +55,22 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      # 7. Install tauri-driver (the WebDriver server binary)
+      # 7. Build the frontend (produces dist/ that tauri-build embeds into the binary)
+      #    Without this step the debug binary uses devUrl=http://localhost:1420 which
+      #    has no server behind it in CI, leaving the WebView blank.
+      - name: Build frontend
+        run: npm run build
+
+      # 8. Install tauri-driver (the WebDriver server binary)
       - name: Install tauri-driver
         run: cargo install tauri-driver --version "^2"
 
-      # 8. Build the Tauri app in debug mode
-      #    Debug builds are faster and include the WDIO plugin.
+      # 9. Build the Tauri app in debug mode with embedded frontend
+      #    --features custom-protocol makes the app serve dist/ via the tauri:// protocol
+      #    instead of relying on a live Vite dev server.
+      #    Debug builds still include the WDIO plugin (cfg(debug_assertions) is true).
       - name: Build Tauri app (debug)
-        run: cargo build -p gists-client
+        run: cargo build -p gists-client --features custom-protocol
         env:
           CARGO_TARGET_DIR: src-tauri/target
 

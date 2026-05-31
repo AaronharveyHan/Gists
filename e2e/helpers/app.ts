@@ -29,7 +29,7 @@ export async function skipOnboardingIfShown(): Promise<void> {
       const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
       return hasOnboarding || hasGistList;
     },
-    { timeout: 15000, interval: 300, timeoutMsg: "App did not reach a known state (onboarding or main UI)" }
+    { timeout: 30000, interval: 500, timeoutMsg: "App did not reach a known state (onboarding or main UI)" }
   );
 
   const onboarding = await browser.$('[data-testid="onboarding"]');
