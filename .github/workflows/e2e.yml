@@ -34,21 +34,23 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
-      # 5. Linux system dependencies (WebKitGTK + WebDriver)
-      #    webkit2gtk-driver ships WebKitWebDriver (the W3C WebDriver binary for GTK WebKit).
-      #    Available in Ubuntu 24.04 repos; ubuntu-24.04 runner is required.
+      # 5. Linux system dependencies (WebKitGTK + display + D-Bus)
+      #    dbus-x11 provides dbus-run-session, which gives the Tauri app a real
+      #    D-Bus session so WebKitGTK's sub-processes can communicate via IPC.
+      #    Without a real D-Bus session the network/web processes fail silently
+      #    and the webview renders a blank page.
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev \
-            webkit2gtk-driver \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
             xvfb \
+            dbus-x11 \
             build-essential
 
       # 6. Install npm dependencies
@@ -59,11 +61,7 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      # 8. Install tauri-driver (the WebDriver server binary)
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --version "^2"
-
-      # 9. Build the Tauri app in debug mode
+      # 8. Build the Tauri app in debug mode
       #    The debug binary uses devUrl=http://localhost:1420 (from tauri.conf.json).
       #    We serve that URL with "vite preview" in the next step instead of embedding
       #    the frontend via --features custom-protocol, because tauri:// pages block
@@ -73,19 +71,19 @@ jobs:
         env:
           CARGO_TARGET_DIR: src-tauri/target
 
-      # 10. Run E2E tests under a virtual display (required for WebKitGTK on Linux)
-      #     "vite preview" serves dist/ on port 1420 so the Tauri devUrl is reachable.
+      # 9. Run E2E tests under a virtual display with a real D-Bus session.
+      #    xvfb-run provides DISPLAY; dbus-run-session provides DBUS_SESSION_BUS_ADDRESS
+      #    so WebKitGTK sub-processes (network/web process) can communicate via IPC.
+      #    "vite preview" serves dist/ on port 1420 so the Tauri devUrl is reachable.
       - name: Run E2E tests
         run: |
           npx vite preview --port 1420 &
           VITE_PID=$!
           # Wait up to 30 s for the preview server to accept connections
           timeout 30 bash -c 'until curl -sf http://localhost:1420 > /dev/null; do sleep 1; done'
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" npm run test:e2e
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+            dbus-run-session -- npm run test:e2e
           kill "$VITE_PID" 2>/dev/null || true
-        env:
-          # Prevent WebKitGTK from trying to connect to a real D-Bus session
-          DBUS_SESSION_BUS_ADDRESS: /dev/null
 
       # 10. Upload Playwright/WDIO reports on failure
       - name: Upload test reports

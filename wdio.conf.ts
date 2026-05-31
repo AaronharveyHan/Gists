@@ -66,6 +66,7 @@ export const config = {
   capabilities: [
     {
       browserName: "tauri",
+      maxInstances: 1,
       "tauri:options": {
         application: appBinaryPath(),
       },
@@ -97,10 +98,10 @@ export const config = {
         // up all DOM commands.  With the frontend properly served by vite-preview the
         // embedded server initialises correctly, making "official" unnecessary.
         driverProvider: "embedded" as const,
-        // Disable broken PowerShell-based auto-install on Windows.
-        // We find the driver that ships with Edge instead (see resolveWindowsDriver).
-        autoInstallTauriDriver: !windowsDriver,
-        // Point directly to the bundled msedgedriver when found.
+        // Embedded mode manages its own WebDriver server (tauri-plugin-wdio-webdriver);
+        // no external tauri-driver needed on any platform.
+        autoInstallTauriDriver: false,
+        // Point directly to the bundled msedgedriver when found (Windows only).
         ...(windowsDriver ? { tauriDriverPath: windowsDriver } : {}),
         env: isolationEnv(),
       },
