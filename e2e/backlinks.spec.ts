@@ -23,6 +23,11 @@ describe("Backlinks Panel", () => {
       public: false,
       files: [["beta.md", "This references [[Gist Alpha]] bidirectionally."]],
     });
+
+    // invoke() writes directly to the DB; the React app won't auto-refresh its
+    // gist list. Reload so the app fetches the newly-created gists on mount.
+    await browser.refresh();
+    await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
   });
 
   it("selects gist A and the backlinks button is in the toolbar", async () => {

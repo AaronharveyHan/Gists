@@ -12,6 +12,10 @@ describe("Editor", () => {
       public: false,
       files: [["editor-test.md", "initial content"]],
     });
+    // invoke() writes directly to the DB; reload so the React app fetches the
+    // newly-created gist on mount and it appears in the gist list.
+    await browser.refresh();
+    await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
   });
 
   it("selecting a gist shows the Monaco editor", async () => {

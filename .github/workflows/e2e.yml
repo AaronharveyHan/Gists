@@ -72,18 +72,27 @@ jobs:
           CARGO_TARGET_DIR: src-tauri/target
 
       # 9. Run E2E tests under a virtual display with a real D-Bus session.
-      #    xvfb-run provides DISPLAY; dbus-run-session provides DBUS_SESSION_BUS_ADDRESS
-      #    so WebKitGTK sub-processes (network/web process) can communicate via IPC.
-      #    "vite preview" serves dist/ on port 1420 so the Tauri devUrl is reachable.
+      #    Each spec file is run as a separate wdio invocation so that every spec
+      #    gets its own fresh Tauri process and embedded WebDriver session.
+      #    Running all specs in one session causes the embedded WebDriver server
+      #    to become unreliable after 3-4 sessions.
+      #    Each separate wdio.conf.ts load creates a new e2eTmpDir, giving every
+      #    spec a fully isolated SQLite DB and XDG data directory.
       - name: Run E2E tests
         run: |
           npx vite preview --port 1420 &
           VITE_PID=$!
           # Wait up to 30 s for the preview server to accept connections
           timeout 30 bash -c 'until curl -sf http://localhost:1420 > /dev/null; do sleep 1; done'
-          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-            dbus-run-session -- npm run test:e2e
+
+          EXIT=0
+          for spec in $(find e2e -name '*.spec.ts' | sort); do
+            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+              dbus-run-session -- npx wdio run wdio.conf.ts --spec "$spec" || EXIT=$?
+          done
+
           kill "$VITE_PID" 2>/dev/null || true
+          exit $EXIT
 
       # 10. Upload Playwright/WDIO reports on failure
       - name: Upload test reports

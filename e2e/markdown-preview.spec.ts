@@ -18,6 +18,10 @@ describe("Markdown Preview", () => {
       public: false,
       files: [["another.md", "# Another"]],
     });
+    // invoke() writes directly to the DB; reload so the React app fetches the
+    // newly-created gists on mount.
+    await browser.refresh();
+    await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
   });
 
   it("selects the markdown gist and shows editor", async () => {

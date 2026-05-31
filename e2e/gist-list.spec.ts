@@ -39,13 +39,18 @@ describe("Gist List", () => {
       files: [["test.md", "# E2E"]],
     });
 
-    // Reload the list by waiting for a list item to appear
+    // invoke() writes directly to the DB; reload so the React app fetches it.
+    await browser.refresh();
+    await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
+
     const item = await browser.$('.gist-item');
     await item.waitForExist({ timeout: 8000 });
     expect(await item.isExisting()).toBe(true);
   });
 
   it("clicking a gist item selects it", async () => {
+    // Wait for at least one item before asserting — the list may still be loading
+    await browser.$('.gist-item').waitForExist({ timeout: 5000 });
     const items = await browser.$$('.gist-item');
     expect(items.length).toBeGreaterThan(0);
 
