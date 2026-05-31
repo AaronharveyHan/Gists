@@ -56,13 +56,13 @@ describe("Backlinks Panel", () => {
     }
     expect(found).toBe(true);
 
-    const backlinksBtn = await browser.$('button[title*="acklink"], .editor__backlinks-btn');
+    const backlinksBtn = await browser.$('[data-testid="backlinks-btn"]');
     await backlinksBtn.waitForExist({ timeout: 8000 });
     expect(await backlinksBtn.isExisting()).toBe(true);
   });
 
   it("clicking the backlinks button opens the panel", async () => {
-    const backlinksBtn = await browser.$('button[title*="acklink"], .editor__backlinks-btn');
+    const backlinksBtn = await browser.$('[data-testid="backlinks-btn"]');
     await backlinksBtn.click();
 
     const panel = await browser.$('[data-testid="backlinks-panel"]');

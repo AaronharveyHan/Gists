@@ -45,9 +45,9 @@ describe("Markdown Preview", () => {
   });
 
   it("toggling preview renders the markdown-preview article", async () => {
-    // Click the preview toggle button
+    // Click the preview toggle button (md-tab-preview appears for .md files)
     const previewBtn = await browser.$(
-      '.editor__preview-btn, button[title*="review"], button[title*="Preview"]'
+      '[data-testid="md-tab-preview"], .editor__preview-btn, button[title*="Preview"]'
     );
     if (await previewBtn.isExisting()) {
       await previewBtn.click();

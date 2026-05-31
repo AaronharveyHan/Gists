@@ -70,8 +70,8 @@ describe("Editor", () => {
   });
 
   it("the preview toggle button renders in the toolbar", async () => {
-    // Editor toolbar should have a preview/toggle button
-    const previewBtn = await browser.$('.editor__preview-btn, button[title*="review"], button[title*="Preview"]');
+    // Editor toolbar should have a preview/toggle button (md-tab-preview appears for .md files)
+    const previewBtn = await browser.$('[data-testid="md-tab-preview"], .editor__preview-btn, button[title*="Preview"]');
     expect(await previewBtn.isExisting()).toBe(true);
   });
 });
