@@ -1,9 +1,6 @@
 [package]
 name = "gists-client"
 version = "0.2.0"
-# The package has two binaries (the Tauri app + the `gist` CLI), so plain
-# `cargo run` / `tauri dev` needs to know which one is the default.
-default-run = "gists-client"
 description = "A lightweight GitHub Gist desktop client"
 authors = []
 license = ""
@@ -38,16 +35,7 @@ dirs = "5"
 sentry = { version = "0.36.0", default-features = false, features = ["backtrace", "panic", "reqwest", "rustls"] }
 
 [target.'cfg(debug_assertions)'.dependencies]
-tauri-plugin-wdio = "1"
+tauri-plugin-wdio-webdriver = "1"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
-# Enables the `gist` command-line binary. Off by default so `cargo tauri build`
-# (the desktop bundle) doesn't compile it.
-cli = []
-
-# Command-line companion. Build with: cargo build --release --features cli --bin gist
-[[bin]]
-name = "gist"
-path = "src/bin/gist.rs"
-required-features = ["cli"]

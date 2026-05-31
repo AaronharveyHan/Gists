@@ -15,7 +15,10 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tokio::sync::Mutex;
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(debug_assertions)]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+    builder
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -35,8 +38,6 @@ fn main() {
             }
         })
         .setup(|app| {
-            #[cfg(debug_assertions)]
-            app.handle().plugin(tauri_plugin_wdio::init())?;
             let app_dir = app
                 .path()
                 .app_data_dir()
