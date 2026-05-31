@@ -1,8 +1,5 @@
 /**
  * Shared helpers for Gists Client E2E tests.
- *
- * All Tauri IPC calls go through browser.tauri.execute() which runs JS
- * in the app's webview with access to window.__TAURI_INTERNALS__.
  */
 
 /** Call a Tauri backend command and return the result. */
@@ -10,11 +7,26 @@ export async function invoke<T = unknown>(
   command: string,
   args: Record<string, unknown> = {}
 ): Promise<T> {
-  return browser.tauri.execute(
-    ({ core }, cmd, a) => core.invoke(cmd, a),
-    command,
-    args
-  ) as Promise<T>;
+  // browser.tauri.execute() uses DirectEvalClient which runs in an isolated JS
+  // context where window.__TAURI_INTERNALS__ is not visible. Use the standard
+  // WebDriver executeAsyncScript (browser.executeAsync) which runs in the page's
+  // main world — the same context that localStorage access works in.
+  type Envelope = { ok: T } | { err: string };
+  const raw = await (browser.executeAsync(function (
+    cmd: string,
+    a: Record<string, unknown>,
+    done: (r: Envelope) => void
+  ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__TAURI_INTERNALS__.core
+      .invoke(cmd, a)
+      .then((v: T) => done({ ok: v }))
+      .catch((e: unknown) => done({ err: String(e) }));
+  },
+  command,
+  args) as unknown as Envelope);
+  if ("err" in raw) throw new Error(raw.err);
+  return raw.ok;
 }
 
 /**
@@ -22,15 +34,32 @@ export async function invoke<T = unknown>(
  * Call this at the start of any test that requires the main UI.
  */
 export async function skipOnboardingIfShown(): Promise<void> {
-  // Wait for the app to reach a known state (onboarding OR main UI) before deciding
-  await browser.waitUntil(
-    async () => {
-      const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
-      const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
-      return hasOnboarding || hasGistList;
-    },
-    { timeout: 30000, interval: 500, timeoutMsg: "App did not reach a known state (onboarding or main UI)" }
-  );
+  const waitForKnownState = (ms: number) =>
+    browser.waitUntil(
+      async () => {
+        const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
+        const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
+        return hasOnboarding || hasGistList;
+      },
+      { timeout: ms, interval: 500 }
+    );
+
+  // First attempt. If the app is in a stale/broken state after previous specs
+  // (blank screen, React error boundary, etc.) this will timeout.
+  let reached = false;
+  try {
+    await waitForKnownState(15000);
+    reached = true;
+  } catch {
+    // Fall through to refresh
+  }
+
+  if (!reached) {
+    // Force a clean page load and try again. localStorage is preserved so the
+    // app will skip onboarding if a previous spec already navigated to local mode.
+    await browser.refresh();
+    await waitForKnownState(20000);
+  }
 
   const onboarding = await browser.$('[data-testid="onboarding"]');
   const isShown = await onboarding.isExisting();
