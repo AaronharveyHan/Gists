@@ -2,6 +2,26 @@
  * Shared helpers for Gists Client E2E tests.
  */
 
+/**
+ * Switch to the main app window if the WebDriver currently points at the
+ * secondary quick-search window (?window=quick-search).  The embedded
+ * WebDriver non-deterministically connects to whichever Tauri window
+ * registered first; we always want the main window for tests.
+ */
+async function switchToMainWindow(): Promise<void> {
+  const url = await browser.getUrl();
+  if (!url.includes("window=quick-search")) return;
+
+  const handles = await browser.getWindowHandles();
+  for (const handle of handles) {
+    await browser.switchToWindow(handle);
+    const windowUrl = await browser.getUrl();
+    if (!windowUrl.includes("window=quick-search")) return;
+  }
+  // If we get here all handles are quick-search — nothing we can do but warn
+  // (the test will likely fail with a more descriptive error from waitForExist).
+}
+
 /** Call a Tauri backend command and return the result. */
 export async function invoke<T = unknown>(
   command: string,
@@ -16,6 +36,18 @@ export async function invoke<T = unknown>(
   // result in a unique window global, then poll with browser.execute() until it
   // resolves.  browser.execute() (executeScript) is confirmed to work because
   // the onboarding spec already uses it (localStorage.removeItem).
+
+  // __TAURI_INTERNALS__ is injected asynchronously by Tauri after the page
+  // loads.  React renders synchronously from zustand rehydration (localMode)
+  // before the bridge is ready, so we must wait for the bridge first.
+  await browser.waitUntil(
+    () => browser.execute(
+      () => typeof (window as any).__TAURI_INTERNALS__?.core?.invoke === "function"
+    ),
+    { timeout: 30000, interval: 100,
+      timeoutMsg: "__TAURI_INTERNALS__.core.invoke never became available" }
+  );
+
   const key = `__e2e_invoke_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
   await browser.execute(
@@ -60,6 +92,9 @@ export async function invoke<T = unknown>(
  * indefinitely and the app never leaves the "Loading…" splash.
  */
 export async function skipOnboardingIfShown(): Promise<void> {
+  // Ensure we're on the main window, not the secondary quick-search window.
+  await switchToMainWindow();
+
   const injectLocalMode = () =>
     browser.execute(() => {
       localStorage.setItem(
