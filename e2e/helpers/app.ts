@@ -41,58 +41,18 @@ export async function invoke<T = unknown>(
   command: string,
   args: Record<string, unknown> = {}
 ): Promise<T> {
-  // browser.tauri.execute() runs in an isolated JS context where
-  // window.__TAURI_INTERNALS__ is not visible.
-  // browser.executeAsync (executeAsyncScript) is unreliable with the embedded
-  // WebDriver — some WebKitWebDriver builds don't implement it correctly.
-  //
-  // Instead: fire the Tauri invoke synchronously via browser.execute(), stash the
-  // result in a unique window global, then poll with browser.execute() until it
-  // resolves.  browser.execute() (executeScript) is confirmed to work because
-  // the onboarding spec already uses it (localStorage.removeItem).
-
-  // __TAURI_INTERNALS__ is injected asynchronously by Tauri after the page
-  // loads.  React renders synchronously from zustand rehydration (localMode)
-  // before the bridge is ready, so we must wait for the bridge first.
-  await browser.waitUntil(
-    () => browser.execute(
-      () => typeof (window as any).__TAURI_INTERNALS__?.core?.invoke === "function"
-    ),
-    { timeout: 30000, interval: 100,
-      timeoutMsg: "__TAURI_INTERNALS__.core.invoke never became available" }
-  );
-
-  const key = `__e2e_invoke_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
-  await browser.execute(
-    (k: string, cmd: string, a: Record<string, unknown>) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const w = window as any;
-      w[k] = undefined;
-      w.__TAURI_INTERNALS__.core
-        .invoke(cmd, a)
-        .then((v: unknown) => { w[k] = { ok: v }; })
-        .catch((e: unknown) => { w[k] = { err: String(e) }; });
-    },
-    key, command, args
-  );
-
-  await browser.waitUntil(
-    () => browser.execute((k: string) => (window as any)[k] !== undefined, key),
-    { timeout: 15000, interval: 100 }
-  );
-
-  type Envelope = { ok: T } | { err: string };
-  const result = await browser.execute(
-    (k: string) => (window as any)[k],
-    key
-  ) as Envelope;
-
-  // Clean up the temporary global
-  await browser.execute((k: string) => { delete (window as any)[k]; }, key);
-
-  if ("err" in result) throw new Error(result.err);
-  return result.ok;
+  // Use browser.tauri.execute() with the { core } parameter — the same IPC
+  // mechanism that @wdio/tauri-service uses internally.  This works in all
+  // environments including CI with Vite preview (http://localhost:1420), where
+  // window.__TAURI_INTERNALS__ is not accessible from the main-world
+  // browser.execute() context.
+  return (browser as any).tauri.execute(
+    ({ core }: { core: { invoke: (cmd: string, args: unknown) => Promise<T> } },
+     cmd: string,
+     a: Record<string, unknown>) => core.invoke(cmd, a),
+    command,
+    args
+  ) as Promise<T>;
 }
 
 /**
