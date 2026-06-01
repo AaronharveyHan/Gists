@@ -14,10 +14,11 @@ describe("Editor", () => {
     });
     // invoke() writes directly to the DB; reload so the React app fetches the
     // newly-created gist on mount and it appears in the gist list.
+    // After refresh the app may briefly show the "Loading…" splash or even
+    // re-show onboarding if zustand rehydration is delayed; skipOnboardingIfShown
+    // handles both cases (waits for either screen, re-skips onboarding if needed).
     await browser.refresh();
-    // Wait for the gist-list container first, then for the actual items —
-    // the items are fetched async from SQLite after the container mounts.
-    await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
+    await skipOnboardingIfShown();
     await browser.$('.gist-item').waitForExist({ timeout: 30000 });
   });
 

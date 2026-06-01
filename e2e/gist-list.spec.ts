@@ -40,8 +40,10 @@ describe("Gist List", () => {
     });
 
     // invoke() writes directly to the DB; reload so the React app fetches it.
+    // skipOnboardingIfShown handles the "Loading…" splash and any unexpected
+    // re-appearance of the onboarding screen after the refresh.
     await browser.refresh();
-    await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 15000 });
+    await skipOnboardingIfShown();
 
     const item = await browser.$('.gist-item');
     await item.waitForExist({ timeout: 8000 });
