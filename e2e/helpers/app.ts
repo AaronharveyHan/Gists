@@ -54,31 +54,44 @@ export async function invoke<T = unknown>(
  * Call this at the start of any test that requires the main UI.
  */
 export async function skipOnboardingIfShown(): Promise<void> {
-  const waitForKnownState = (ms: number) =>
-    browser.waitUntil(
-      async () => {
-        const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
-        const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
-        return hasOnboarding || hasGistList;
-      },
-      { timeout: ms, interval: 500 }
-    );
+  const isKnownState = async () => {
+    const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
+    const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
+    return hasOnboarding || hasGistList;
+  };
 
-  // First attempt. If the app is in a stale/broken state after previous specs
-  // (blank screen, React error boundary, etc.) this will timeout.
-  let reached = false;
-  try {
-    await waitForKnownState(15000);
-    reached = true;
-  } catch {
-    // Fall through to refresh
+  const waitForKnownState = (ms: number) =>
+    browser.waitUntil(isKnownState, { timeout: ms, interval: 500 });
+
+  // Under WebKitGTK the embedded webview occasionally loads blank (no JS bridge):
+  // App.tsx then hangs on getToken() and stays on the "Loading…" splash forever,
+  // so neither onboarding nor the gist list ever appears. A page refresh usually
+  // recovers the bridge, so retry the refresh several times before giving up.
+  let reached = await isKnownState();
+  if (!reached) {
+    try {
+      await waitForKnownState(15000);
+      reached = true;
+    } catch {
+      // Fall through to the refresh-retry loop below.
+    }
+  }
+
+  for (let attempt = 0; !reached && attempt < 3; attempt++) {
+    await browser.refresh();
+    try {
+      await waitForKnownState(20000);
+      reached = true;
+    } catch {
+      // Try another refresh.
+    }
   }
 
   if (!reached) {
-    // Force a clean page load and try again. localStorage is preserved so the
-    // app will skip onboarding if a previous spec already navigated to local mode.
-    await browser.refresh();
-    await waitForKnownState(20000);
+    throw new Error(
+      "App never reached a known state (onboarding or gist-list) after 3 refreshes — " +
+        "the webview likely loaded blank."
+    );
   }
 
   const onboarding = await browser.$('[data-testid="onboarding"]');
