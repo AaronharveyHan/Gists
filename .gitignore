@@ -4,6 +4,7 @@ dist/
 .env.*
 
 # Tauri / Rust
+/target/
 src-tauri/target/
 src-tauri/WixTools/
 
@@ -19,4 +20,3 @@ src-tauri/gen/
 extensions/raycast/node_modules/
 extensions/raycast/dist/
 extensions/raycast/.raycast-swift-build/
-/target

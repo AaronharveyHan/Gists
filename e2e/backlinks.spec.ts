@@ -57,13 +57,17 @@ describe("Backlinks Panel", () => {
     }
     expect(found).toBe(true);
 
-    const backlinksBtn = await browser.$('[data-testid="backlinks-btn"]');
+    // Use .overflow-actions selector to find the visible toolbar button only.
+    // The same button also renders in the shadow measurement row
+    // (.overflow-actions__shadow, visibility:hidden) which comes first in DOM
+    // order — clicking that row throws "element not interactable".
+    const backlinksBtn = await browser.$('.overflow-actions [data-testid="backlinks-btn"]');
     await backlinksBtn.waitForExist({ timeout: 8000 });
     expect(await backlinksBtn.isExisting()).toBe(true);
   });
 
   it("clicking the backlinks button opens the panel", async () => {
-    const backlinksBtn = await browser.$('[data-testid="backlinks-btn"]');
+    const backlinksBtn = await browser.$('.overflow-actions [data-testid="backlinks-btn"]');
     await backlinksBtn.click();
 
     const panel = await browser.$('[data-testid="backlinks-panel"]');

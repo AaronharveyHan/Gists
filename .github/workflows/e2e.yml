@@ -86,13 +86,33 @@ jobs:
           timeout 30 bash -c 'until curl -sf http://localhost:1420 > /dev/null; do sleep 1; done'
 
           EXIT=0
+          PASSED=()
+          FAILED=()
           for spec in $(find e2e -name '*.spec.ts' | sort); do
-            xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
-              dbus-run-session -- npx wdio run wdio.conf.ts --spec "$spec" || EXIT=$?
+            echo ""
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "▶ RUNNING: $spec"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            if xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" \
+              dbus-run-session -- npx wdio run wdio.conf.ts --spec "$spec"; then
+              PASSED+=("$spec")
+              echo "✓ PASSED: $spec"
+            else
+              EXIT=1
+              FAILED+=("$spec")
+              echo "✗ FAILED: $spec"
+            fi
             # Kill any lingering Tauri process so port 4445 is free for the next spec
             pkill -f 'target/debug/gists-client' 2>/dev/null || true
             sleep 1
           done
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "E2E SUMMARY: ${#PASSED[@]} passed, ${#FAILED[@]} failed"
+          for s in "${PASSED[@]}"; do echo "  ✓ $s"; done
+          for s in "${FAILED[@]}"; do echo "  ✗ $s"; done
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
           kill "$VITE_PID" 2>/dev/null || true
           exit $EXIT
