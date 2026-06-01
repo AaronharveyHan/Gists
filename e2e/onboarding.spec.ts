@@ -4,28 +4,34 @@
  * The app is launched with a fresh temp data dir (no settings, no token),
  * so it always starts on the onboarding screen.
  */
-import { countElements } from "./helpers/app";
+import { countElements, switchToMainWindow } from "./helpers/app";
 
 describe("Onboarding", () => {
   before(async () => {
+    // Switch to the main window first — the embedded WebDriver may connect to
+    // the quick-search window (which never shows onboarding or gist-list) and
+    // this also bypasses the per-command 5 s beforeCommand overhead.
+    await switchToMainWindow();
+
     // All spec files share the same temp dir (and thus the same localStorage).
     // If any earlier spec navigated to local mode, 'localMode:true' is persisted and the app
     // skips onboarding on the next launch. We clear that key and reload so this suite
     // always starts at the onboarding screen regardless of spec execution order.
     //
-    // We MUST wait for the page to be fully loaded before calling browser.execute()
-    // because WebKitGTK blocks script injection on a blank / partially-loaded page.
+    // Use browser.execute() for DOM checks so polls are fast (execute is not in
+    // the focusCommands list and never triggers the 5 s getWindowStates overhead).
+    const hasOnboarding = () =>
+      browser.execute(() => !!document.querySelector('[data-testid="onboarding"]'));
+    const hasGistList = () =>
+      browser.execute(() => !!document.querySelector('[data-testid="gist-list"]'));
+
     await browser.waitUntil(
-      async () => {
-        const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
-        const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
-        return hasOnboarding || hasGistList;
-      },
+      async () => (await hasOnboarding()) || (await hasGistList()),
       { timeout: 30000, interval: 500, timeoutMsg: "App did not load before onboarding reset" }
     );
 
     // If we're already on the onboarding screen we're done.
-    if (await browser.$('[data-testid="onboarding"]').isExisting()) return;
+    if (await hasOnboarding()) return;
 
     // Main UI is showing (localMode was persisted). Clear it and reload.
     await browser.execute(() => {
@@ -33,7 +39,7 @@ describe("Onboarding", () => {
     });
     await browser.refresh();
     // Wait for onboarding to appear after the reload
-    await browser.$('[data-testid="onboarding"]').waitForDisplayed({ timeout: 15000 });
+    await browser.waitUntil(hasOnboarding, { timeout: 15000, interval: 300 });
   });
 
   it("displays the onboarding screen on first launch", async () => {

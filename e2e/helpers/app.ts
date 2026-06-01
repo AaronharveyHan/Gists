@@ -25,7 +25,7 @@ const _switchedSessions = new Set<string>();
  * already has the session and the bypass is in effect for the remaining
  * lifetime of the session.
  */
-async function switchToMainWindow(): Promise<void> {
+export async function switchToMainWindow(): Promise<void> {
   const sid = browser.sessionId ?? "default";
   if (_switchedSessions.has(sid)) return;   // already bypassed for this session
   _switchedSessions.add(sid);
