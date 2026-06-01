@@ -96,8 +96,28 @@ export async function skipOnboardingIfShown(): Promise<void> {
     }
   }
 
+  // Still no gist-list: dump what the webview actually contains so the CI log
+  // tells us whether React mounted, what URL we're on, and what's rendered.
+  const diag = await browser.execute(() => {
+    const root = document.getElementById("root");
+    const w = window as any;
+    return {
+      url: location.href,
+      readyState: document.readyState,
+      rootChildCount: root ? root.childElementCount : -1,
+      bodyText: (document.body?.innerText || "").slice(0, 300),
+      hasTauriInternals: typeof w.__TAURI_INTERNALS__ !== "undefined",
+      hasSplash: !!document.querySelector(".splash"),
+      hasOnboarding: !!document.querySelector('[data-testid="onboarding"]'),
+      hasErrorBoundary: !!document.querySelector(".app-error, .error-boundary"),
+      authLS: localStorage.getItem("gists-client-auth"),
+    };
+  });
+
   throw new Error(
-    "gist-list never appeared after local-mode localStorage injection + 2 refreshes"
+    "gist-list never appeared after local-mode localStorage injection + 2 refreshes.\n" +
+      "Webview diagnostics: " +
+      JSON.stringify(diag, null, 2)
   );
 }
 
