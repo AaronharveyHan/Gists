@@ -104,7 +104,9 @@ jobs:
             | Windows (x86_64) | `gist-windows-x86_64.exe` |
             | Linux (x86_64) | `gist-linux-x86_64` |
             > macOS / Linux：`chmod +x gist-* && mv gist-* /usr/local/bin/gist`，然后 `gist save foo.py`。与桌面端共享同一数据库。
-          releaseDraft: true      # 先创建草稿，检查产物无误后手动发布
+          releaseDraft: false     # Must be false: draft releases are excluded from
+                              # releases/latest/download/ so the Tauri updater would
+                              # never find latest.json and auto-update silently fails.
           prerelease: false
 
       # 9. 重命名为带平台后缀的资产名（避免三平台文件名冲突）
