@@ -8,13 +8,22 @@ import ReactDOM from "react-dom/client";
 // page scripts, including __TAURI_INTERNALS__.  This bridge runs in the main
 // world where __TAURI_INTERNALS__ IS accessible.
 //
+// @tauri-apps/api/core uses window.__TAURI_INTERNALS__.invoke() directly.
+// Some versions / tauri-service also expose it under .core.invoke — try both.
+//
 // Protocol:
 //   test  → localStorage.__e2e_req_<id> = JSON { cmd, args }
-//   bridge reads req, removes it, calls __TAURI_INTERNALS__.core.invoke(cmd, args)
+//   bridge reads req, removes it, calls __TAURI_INTERNALS__.invoke(cmd, args)
 //   bridge → localStorage.__e2e_res_<id> = JSON { ok } | JSON { err }
 //   test  polls __e2e_res_<id>, reads result, removes it
 if (typeof localStorage !== "undefined" && localStorage.getItem("__e2e__") === "1") {
   setInterval(async () => {
+    const w = window as any;
+    // Try .invoke (current @tauri-apps/api path) then .core.invoke (older/service path)
+    const inv: ((cmd: string, args: unknown) => Promise<unknown>) | undefined =
+      w.__TAURI_INTERNALS__?.invoke ?? w.__TAURI_INTERNALS__?.core?.invoke;
+    if (!inv) return; // not ready yet — retry next tick
+
     const keys: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
@@ -27,8 +36,7 @@ if (typeof localStorage !== "undefined" && localStorage.getItem("__e2e__") === "
       const id = reqKey.slice("__e2e_req_".length);
       try {
         const { cmd, args } = JSON.parse(raw) as { cmd: string; args: unknown };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result = await (window as any).__TAURI_INTERNALS__.core.invoke(cmd, args);
+        const result = await inv(cmd, args);
         localStorage.setItem(`__e2e_res_${id}`, JSON.stringify({ ok: result }));
       } catch (err) {
         localStorage.setItem(`__e2e_res_${id}`, JSON.stringify({ err: String(err) }));
