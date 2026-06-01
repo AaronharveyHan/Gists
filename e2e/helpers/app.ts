@@ -12,28 +12,28 @@ const _switchedSessions = new Set<string>();
  *
  * The embedded WebDriver non-deterministically connects to whichever Tauri
  * window registers first — sometimes the secondary "quick-search" window
- * instead of "main".  Using browser.switchWindow() (the tauri-service custom
- * command) both corrects the active window AND adds the session to
+ * instead of "main".  Using browser.tauri.switchWindow() (the tauri-service
+ * custom command at browser.tauri, NOT WDIO's built-in browser.switchWindow)
+ * both corrects the active window AND adds the session to
  * userSwitchedWindowCache inside the service, which causes
  * ensureActiveWindowFocus() to short-circuit for every subsequent DOM command,
  * eliminating the per-command 5 s getWindowStates() IPC timeout.
  *
  * switchWindowByLabel() calls listWindowLabels() first, which itself has a 5 s
- * IPC timeout.  We therefore only call browser.switchWindow("main") ONCE per
- * session; subsequent calls are skipped because userSwitchedWindowCache already
- * has the session and the bypass is in effect for the remaining lifetime of the
- * session.
+ * IPC timeout.  We therefore only call browser.tauri.switchWindow("main") ONCE
+ * per session; subsequent calls are skipped because userSwitchedWindowCache
+ * already has the session and the bypass is in effect for the remaining
+ * lifetime of the session.
  */
 async function switchToMainWindow(): Promise<void> {
   const sid = browser.sessionId ?? "default";
   if (_switchedSessions.has(sid)) return;   // already bypassed for this session
   _switchedSessions.add(sid);
 
-  // browser.switchWindow is a tauri-service custom command.  It calls
-  // switchWindowByLabel("main") which: validates the label via a 5 s IPC call
-  // (which times out and is ignored), adds the session to userSwitchedWindowCache
-  // (bypass persists for the session), then calls browser.switchToWindow("main").
-  await (browser as any).switchWindow("main");
+  // IMPORTANT: use browser.tauri.switchWindow (tauri-service API), NOT
+  // browser.switchWindow (WDIO built-in that searches by title/URL and never
+  // touches userSwitchedWindowCache).
+  await (browser as any).tauri.switchWindow("main");
 }
 
 /** Call a Tauri backend command and return the result. */
@@ -119,10 +119,16 @@ export async function skipOnboardingIfShown(): Promise<void> {
 
   await injectLocalMode();
 
+  // Use browser.execute() for DOM presence checks — unlike browser.$() these
+  // do NOT trigger ensureActiveWindowFocus in beforeCommand, so they never pay
+  // the 5 s getWindowStates() IPC-timeout penalty regardless of cache state.
+  const hasGistList = () =>
+    browser.execute(() => !!document.querySelector('[data-testid="gist-list"]'));
+
   // Fast-path: gist-list is already in the DOM (e.g. second call within the
   // same spec after the spec's own browser.refresh(), which preserves the
   // localStorage we wrote and lets the app start in local mode directly).
-  if (await browser.$('[data-testid="gist-list"]').isExisting()) return;
+  if (await hasGistList()) return;
 
   // Refresh so zustand rehydrates the localMode write on next React mount.
   // In local mode App.tsx sets checking=false synchronously (no IPC), so
@@ -132,10 +138,7 @@ export async function skipOnboardingIfShown(): Promise<void> {
   // Wait for gist-list. Retry with another refresh on rare blank-page flakes.
   for (let attempt = 0; attempt <= 2; attempt++) {
     try {
-      await browser.waitUntil(
-        () => browser.$('[data-testid="gist-list"]').isExisting(),
-        { timeout: 20000, interval: 500 }
-      );
+      await browser.waitUntil(hasGistList, { timeout: 20000, interval: 500 });
       return;
     } catch {
       if (attempt < 2) {
