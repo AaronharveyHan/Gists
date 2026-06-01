@@ -50,59 +50,55 @@ export async function invoke<T = unknown>(
 }
 
 /**
- * If the onboarding screen is visible, skip it by entering local mode.
+ * Ensure the app is in local mode and the gist-list is rendered.
  * Call this at the start of any test that requires the main UI.
+ *
+ * Approach: write localMode=true directly into localStorage before the page
+ * re-initialises. When zustand rehydrates on the next mount, App.tsx takes
+ * the localMode fast-path and renders Layout without ever calling getToken().
+ * This eliminates the WebKitGTK IPC slow-start flake where getToken() hangs
+ * indefinitely and the app never leaves the "Loading…" splash.
  */
 export async function skipOnboardingIfShown(): Promise<void> {
-  const isKnownState = async () => {
-    const hasOnboarding = await browser.$('[data-testid="onboarding"]').isExisting();
-    const hasGistList = await browser.$('[data-testid="gist-list"]').isExisting();
-    return hasOnboarding || hasGistList;
-  };
+  const injectLocalMode = () =>
+    browser.execute(() => {
+      localStorage.setItem(
+        "gists-client-auth",
+        JSON.stringify({ state: { localMode: true }, version: 0 })
+      );
+    });
 
-  const waitForKnownState = (ms: number) =>
-    browser.waitUntil(isKnownState, { timeout: ms, interval: 500 });
+  await injectLocalMode();
 
-  // Under WebKitGTK the embedded webview occasionally loads blank (no JS bridge):
-  // App.tsx then hangs on getToken() and stays on the "Loading…" splash forever,
-  // so neither onboarding nor the gist list ever appears. A page refresh usually
-  // recovers the bridge, so retry the refresh several times before giving up.
-  let reached = await isKnownState();
-  if (!reached) {
+  // Fast-path: gist-list is already in the DOM (e.g. second call within the
+  // same spec after the spec's own browser.refresh(), which preserves the
+  // localStorage we wrote and lets the app start in local mode directly).
+  if (await browser.$('[data-testid="gist-list"]').isExisting()) return;
+
+  // Refresh so zustand rehydrates the localMode write on next React mount.
+  // In local mode App.tsx sets checking=false synchronously (no IPC), so
+  // Layout → Sidebar → gist-list renders in the very first render pass.
+  await browser.refresh();
+
+  // Wait for gist-list. Retry with another refresh on rare blank-page flakes.
+  for (let attempt = 0; attempt <= 2; attempt++) {
     try {
-      await waitForKnownState(15000);
-      reached = true;
+      await browser.waitUntil(
+        () => browser.$('[data-testid="gist-list"]').isExisting(),
+        { timeout: 20000, interval: 500 }
+      );
+      return;
     } catch {
-      // Fall through to the refresh-retry loop below.
+      if (attempt < 2) {
+        await injectLocalMode();
+        await browser.refresh();
+      }
     }
   }
 
-  for (let attempt = 0; !reached && attempt < 3; attempt++) {
-    await browser.refresh();
-    try {
-      await waitForKnownState(20000);
-      reached = true;
-    } catch {
-      // Try another refresh.
-    }
-  }
-
-  if (!reached) {
-    throw new Error(
-      "App never reached a known state (onboarding or gist-list) after 3 refreshes — " +
-        "the webview likely loaded blank."
-    );
-  }
-
-  const onboarding = await browser.$('[data-testid="onboarding"]');
-  const isShown = await onboarding.isExisting();
-  if (!isShown) return;
-
-  const skipBtn = await browser.$('.ob__ghost-link');
-  await skipBtn.waitForDisplayed({ timeout: 5000 });
-  await skipBtn.click();
-
-  await browser.$('[data-testid="gist-list"]').waitForDisplayed({ timeout: 10000 });
+  throw new Error(
+    "gist-list never appeared after local-mode localStorage injection + 2 refreshes"
+  );
 }
 
 /** Wait until the gist list is rendered (possibly empty). */
