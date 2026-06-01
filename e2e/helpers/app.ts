@@ -7,26 +7,46 @@ export async function invoke<T = unknown>(
   command: string,
   args: Record<string, unknown> = {}
 ): Promise<T> {
-  // browser.tauri.execute() uses DirectEvalClient which runs in an isolated JS
-  // context where window.__TAURI_INTERNALS__ is not visible. Use the standard
-  // WebDriver executeAsyncScript (browser.executeAsync) which runs in the page's
-  // main world — the same context that localStorage access works in.
+  // browser.tauri.execute() runs in an isolated JS context where
+  // window.__TAURI_INTERNALS__ is not visible.
+  // browser.executeAsync (executeAsyncScript) is unreliable with the embedded
+  // WebDriver — some WebKitWebDriver builds don't implement it correctly.
+  //
+  // Instead: fire the Tauri invoke synchronously via browser.execute(), stash the
+  // result in a unique window global, then poll with browser.execute() until it
+  // resolves.  browser.execute() (executeScript) is confirmed to work because
+  // the onboarding spec already uses it (localStorage.removeItem).
+  const key = `__e2e_invoke_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  await browser.execute(
+    (k: string, cmd: string, a: Record<string, unknown>) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const w = window as any;
+      w[k] = undefined;
+      w.__TAURI_INTERNALS__.core
+        .invoke(cmd, a)
+        .then((v: unknown) => { w[k] = { ok: v }; })
+        .catch((e: unknown) => { w[k] = { err: String(e) }; });
+    },
+    key, command, args
+  );
+
+  await browser.waitUntil(
+    () => browser.execute((k: string) => (window as any)[k] !== undefined, key),
+    { timeout: 15000, interval: 100 }
+  );
+
   type Envelope = { ok: T } | { err: string };
-  const raw = await (browser.executeAsync(function (
-    cmd: string,
-    a: Record<string, unknown>,
-    done: (r: Envelope) => void
-  ) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__TAURI_INTERNALS__.core
-      .invoke(cmd, a)
-      .then((v: T) => done({ ok: v }))
-      .catch((e: unknown) => done({ err: String(e) }));
-  },
-  command,
-  args) as unknown as Envelope);
-  if ("err" in raw) throw new Error(raw.err);
-  return raw.ok;
+  const result = await browser.execute(
+    (k: string) => (window as any)[k],
+    key
+  ) as Envelope;
+
+  // Clean up the temporary global
+  await browser.execute((k: string) => { delete (window as any)[k]; }, key);
+
+  if ("err" in result) throw new Error(result.err);
+  return result.ok;
 }
 
 /**
