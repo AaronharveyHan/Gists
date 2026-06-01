@@ -36,23 +36,49 @@ export async function switchToMainWindow(): Promise<void> {
   await (browser as any).tauri.switchWindow("main");
 }
 
-/** Call a Tauri backend command and return the result. */
+/** Call a Tauri backend command and return the result.
+ *
+ * Uses a localStorage-based bridge that runs in the app's main JS world (where
+ * __TAURI_INTERNALS__ is accessible).  WebDriver's browser.execute() runs in an
+ * isolated world that shares DOM Web APIs but cannot access custom window globals
+ * set by page scripts — including __TAURI_INTERNALS__ and browser.tauri.execute().
+ *
+ * The bridge is registered in src/main.tsx when localStorage.__e2e__ === '1'.
+ * skipOnboardingIfShown() sets that flag before the first page refresh, so the
+ * bridge is active by the time any test calls invoke().
+ */
 export async function invoke<T = unknown>(
   command: string,
   args: Record<string, unknown> = {}
 ): Promise<T> {
-  // Use browser.tauri.execute() with the { core } parameter — the same IPC
-  // mechanism that @wdio/tauri-service uses internally.  This works in all
-  // environments including CI with Vite preview (http://localhost:1420), where
-  // window.__TAURI_INTERNALS__ is not accessible from the main-world
-  // browser.execute() context.
-  return (browser as any).tauri.execute(
-    ({ core }: { core: { invoke: (cmd: string, args: unknown) => Promise<T> } },
-     cmd: string,
-     a: Record<string, unknown>) => core.invoke(cmd, a),
-    command,
-    args
-  ) as Promise<T>;
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const reqKey = `__e2e_req_${id}`;
+  const resKey = `__e2e_res_${id}`;
+
+  await browser.execute(
+    (rk: string, cmd: string, a: Record<string, unknown>) => {
+      localStorage.setItem(rk, JSON.stringify({ cmd, args: a }));
+    },
+    reqKey, command, args
+  );
+
+  await browser.waitUntil(
+    () => browser.execute(
+      (resK: string) => localStorage.getItem(resK) !== null,
+      resKey
+    ),
+    { timeout: 15000, interval: 100, timeoutMsg: `invoke(${command}) timed out after 15s` }
+  );
+
+  type Envelope = { ok: T } | { err: string };
+  const result = await browser.execute((resK: string) => {
+    const raw = localStorage.getItem(resK)!;
+    localStorage.removeItem(resK);
+    return JSON.parse(raw);
+  }, resKey) as Envelope;
+
+  if ("err" in result) throw new Error(result.err);
+  return result.ok;
 }
 
 /**
@@ -75,6 +101,9 @@ export async function skipOnboardingIfShown(): Promise<void> {
         "gists-client-auth",
         JSON.stringify({ state: { localMode: true }, version: 0 })
       );
+      // Activate the E2E bridge in src/main.tsx so invoke() can call Tauri IPC
+      // from the main world after the next page refresh.
+      localStorage.setItem("__e2e__", "1");
     });
 
   await injectLocalMode();
