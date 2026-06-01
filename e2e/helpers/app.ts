@@ -2,24 +2,38 @@
  * Shared helpers for Gists Client E2E tests.
  */
 
+// Track which WDIO sessions have already had their window switched so we only
+// pay the 5 s IPC-timeout cost of browser.switchWindow() once per spec.
+const _switchedSessions = new Set<string>();
+
 /**
- * Switch to the main app window if the WebDriver currently points at the
- * secondary quick-search window (?window=quick-search).  The embedded
- * WebDriver non-deterministically connects to whichever Tauri window
- * registered first; we always want the main window for tests.
+ * Switch to the main Tauri window (label "main") and bypass the
+ * @wdio/tauri-service beforeCommand overhead for the rest of the spec.
+ *
+ * The embedded WebDriver non-deterministically connects to whichever Tauri
+ * window registers first — sometimes the secondary "quick-search" window
+ * instead of "main".  Using browser.switchWindow() (the tauri-service custom
+ * command) both corrects the active window AND adds the session to
+ * userSwitchedWindowCache inside the service, which causes
+ * ensureActiveWindowFocus() to short-circuit for every subsequent DOM command,
+ * eliminating the per-command 5 s getWindowStates() IPC timeout.
+ *
+ * switchWindowByLabel() calls listWindowLabels() first, which itself has a 5 s
+ * IPC timeout.  We therefore only call browser.switchWindow("main") ONCE per
+ * session; subsequent calls are skipped because userSwitchedWindowCache already
+ * has the session and the bypass is in effect for the remaining lifetime of the
+ * session.
  */
 async function switchToMainWindow(): Promise<void> {
-  const url = await browser.getUrl();
-  if (!url.includes("window=quick-search")) return;
+  const sid = browser.sessionId ?? "default";
+  if (_switchedSessions.has(sid)) return;   // already bypassed for this session
+  _switchedSessions.add(sid);
 
-  const handles = await browser.getWindowHandles();
-  for (const handle of handles) {
-    await browser.switchToWindow(handle);
-    const windowUrl = await browser.getUrl();
-    if (!windowUrl.includes("window=quick-search")) return;
-  }
-  // If we get here all handles are quick-search — nothing we can do but warn
-  // (the test will likely fail with a more descriptive error from waitForExist).
+  // browser.switchWindow is a tauri-service custom command.  It calls
+  // switchWindowByLabel("main") which: validates the label via a 5 s IPC call
+  // (which times out and is ignored), adds the session to userSwitchedWindowCache
+  // (bypass persists for the session), then calls browser.switchToWindow("main").
+  await (browser as any).switchWindow("main");
 }
 
 /** Call a Tauri backend command and return the result. */
