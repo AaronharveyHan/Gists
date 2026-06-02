@@ -80,6 +80,13 @@ jobs:
       #    spec a fully isolated SQLite DB and XDG data directory.
       - name: Run E2E tests
         run: |
+          # Rebuild the frontend immediately before serving so vite preview can
+          # never serve a stale dist/. Without this, the served bundle can be an
+          # older build (e.g. when only the test step is re-run, or when an
+          # earlier cached build is restored), which silently runs the tests
+          # against out-of-date UI — toolbar buttons / md-tabs / data-testids
+          # present in source appear "missing" at runtime.
+          npm run build
           npx vite preview --port 1420 &
           VITE_PID=$!
           # Wait up to 30 s for the preview server to accept connections

@@ -61,25 +61,27 @@ describe("Editor", () => {
 
   it("typing updates the editor content", async () => {
     const editor = await browser.$('.monaco-editor');
+    // Click the editor and nudge the hidden textarea so keystrokes land in
+    // Monaco's input (in WebKitGTK the outer-container click alone sometimes
+    // doesn't deliver focus to the textarea).
     await editor.click();
+    const textarea = await browser.$('.monaco-editor textarea');
+    if (await textarea.isExisting()) await textarea.click().catch(() => {});
     // Select all and replace
     await browser.keys(['Control', 'a']);
     await browser.pause(100);
     await browser.keys('Hello E2E world');
-    await browser.pause(300);
+    await browser.pause(200);
+    // Dismiss the AI inline-completion ghost text. It is rendered as extra
+    // spans inside .view-lines and otherwise pollutes getText() with the
+    // suggested (original) content interleaved between the typed characters.
+    // Escape clears the inline suggestion without using browser.execute(),
+    // which times out in this WebKitGTK environment.
+    await browser.keys(['Escape']);
+    await browser.pause(200);
 
-    // Read actual editor text via JS, stripping Monaco ghost-text decoration
-    // spans (AI inline-completion suggestions that show up in .view-lines
-    // DOM and pollute a plain .getText() call).
-    const text = await browser.execute((): string => {
-      const viewLines = document.querySelector('.monaco-editor .view-lines');
-      if (!viewLines) return '';
-      const clone = viewLines.cloneNode(true) as Element;
-      clone.querySelectorAll(
-        '.ghost-text-decoration, .ghost-text-decoration-preview, .ghost-text-hidden',
-      ).forEach((el) => el.remove());
-      return clone.textContent ?? '';
-    });
+    const editorContent = await browser.$('.monaco-editor .view-lines');
+    const text = await editorContent.getText();
     expect(text).toContain('Hello E2E world');
   });
 
