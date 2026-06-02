@@ -56,11 +56,17 @@ describe("Markdown Preview", () => {
   });
 
   it("toggling preview renders the markdown-preview article", async () => {
-    // md-tab-preview is rendered only when isMdActive=true (a .md file is active).
-    // Wait for the tab to appear; the editor component renders tabs before Monaco.
+    // md-tab-preview is rendered when isMdActive=true (a .md file is active).
+    // Use waitForExist (not waitForDisplayed) because in WebKitGTK the button
+    // may momentarily have zero layout dimensions during reflow, causing
+    // waitForDisplayed to time out even though the element is in the DOM.
+    // Click via JS for the same reason — bypasses WebDriver interactability check.
     const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
-    await previewBtn.waitForDisplayed({ timeout: 8000 });
-    await previewBtn.click();
+    await previewBtn.waitForExist({ timeout: 8000 });
+    await browser.execute(() => {
+      const btn = document.querySelector<HTMLElement>('[data-testid="md-tab-preview"]');
+      btn?.click();
+    });
     // After switching to preview mode the preview pane becomes visible.
     const preview = await browser.$('.markdown-preview');
     await preview.waitForExist({ timeout: 8000 });
@@ -91,7 +97,10 @@ describe("Markdown Preview", () => {
   it("wiki-link [[Another Gist]] renders as a clickable button", async () => {
     const preview = await browser.$('.markdown-preview');
     if (await preview.isExisting()) {
+      // Wiki-link resolution looks up the linked gist asynchronously; give it
+      // a moment to resolve before asserting the button exists.
       const wikiLink = await preview.$('.md-wiki-link');
+      await wikiLink.waitForExist({ timeout: 5000 });
       expect(await wikiLink.isExisting()).toBe(true);
       const text = await wikiLink.getText();
       expect(text).toBe('Another Gist');

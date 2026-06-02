@@ -68,9 +68,18 @@ describe("Editor", () => {
     await browser.keys('Hello E2E world');
     await browser.pause(300);
 
-    // The editor view-lines should contain the typed text
-    const editorContent = await browser.$('.monaco-editor .view-lines');
-    const text = await editorContent.getText();
+    // Read actual editor text via JS, stripping Monaco ghost-text decoration
+    // spans (AI inline-completion suggestions that show up in .view-lines
+    // DOM and pollute a plain .getText() call).
+    const text = await browser.execute((): string => {
+      const viewLines = document.querySelector('.monaco-editor .view-lines');
+      if (!viewLines) return '';
+      const clone = viewLines.cloneNode(true) as Element;
+      clone.querySelectorAll(
+        '.ghost-text-decoration, .ghost-text-decoration-preview, .ghost-text-hidden',
+      ).forEach((el) => el.remove());
+      return clone.textContent ?? '';
+    });
     expect(text).toContain('Hello E2E world');
   });
 
@@ -86,8 +95,17 @@ describe("Editor", () => {
   });
 
   it("the preview toggle button renders in the toolbar", async () => {
-    // Editor toolbar should have a preview/toggle button (md-tab-preview appears for .md files)
-    const previewBtn = await browser.$('[data-testid="md-tab-preview"], .editor__preview-btn, button[title*="Preview"]');
+    // Re-select the gist so the editor state is clean after previous test
+    // interactions (Ctrl+A typing, Ctrl+S save) that may have left Monaco or
+    // the active-file state in a transient unresolved condition.
+    const item = await browser.$('.gist-item');
+    if (await item.isExisting()) {
+      await item.click();
+      await browser.$('.monaco-editor').waitForExist({ timeout: 10000 });
+    }
+
+    // md-tab-preview is rendered whenever a .md file is active (isMdActive).
+    const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
     await previewBtn.waitForExist({ timeout: 8000 });
     expect(await previewBtn.isExisting()).toBe(true);
   });

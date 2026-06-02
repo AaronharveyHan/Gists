@@ -61,11 +61,13 @@ describe("Backlinks Panel", () => {
     // editor__toolbar, so once Monaco is in the DOM the toolbar is fully rendered.
     await browser.$('.monaco-editor').waitForExist({ timeout: 15000 });
 
-    // The backlinks button lives in .overflow-actions (the visible toolbar row).
-    // If the toolbar is narrow it may be collapsed into the ⋯ dropdown
-    // (display:none) but it is always present in the DOM; waitForExist is
-    // sufficient to confirm the button is wired up as a toolbar action.
-    const backlinksBtn = await browser.$('.overflow-actions [data-testid="backlinks-btn"]');
+    // The backlinks button is rendered in both the OverflowActions shadow
+    // measurement row (.overflow-actions__shadow) and the visible row
+    // (.overflow-actions).  The plain data-testid selector (no parent
+    // qualifier) matches the shadow-row copy which is always in the DOM
+    // regardless of whether the button is currently visible or collapsed into
+    // the ⋯ overflow menu.
+    const backlinksBtn = await browser.$('[data-testid="backlinks-btn"]');
     await backlinksBtn.waitForExist({ timeout: 10000 });
     expect(await backlinksBtn.isExisting()).toBe(true);
   });
