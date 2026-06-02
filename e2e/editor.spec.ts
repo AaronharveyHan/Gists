@@ -96,13 +96,11 @@ describe("Editor", () => {
     }
 
     // md-tab-preview is rendered whenever a .md file is active (isMdActive).
-    // Use browser.execute querySelector — waitForExist in WebKitGTK WebDriver
-    // may not find elements at negative CSS positions (shadow row) or during reflow.
-    await browser.waitUntil(
-      () => browser.execute(() => !!document.querySelector('[data-testid="md-tab-preview"]')),
-      { timeout: 15000, interval: 200, timeoutMsg: 'md-tab-preview not in DOM after 15 s' }
-    );
+    // Use browser.$ (WebDriver findElement) — it reliably reaches the editor
+    // DOM in WebKitGTK, whereas browser.execute() targets a JS context that
+    // does NOT see the editor (only the sidebar/gist-list is visible there).
     const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
+    await previewBtn.waitForExist({ timeout: 20000 });
     expect(await previewBtn.isExisting()).toBe(true);
   });
 });

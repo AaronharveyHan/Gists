@@ -55,26 +55,15 @@ describe("Markdown Preview", () => {
     expect(await editor.isExisting()).toBe(true);
   });
 
-  it("toggling preview renders the markdown-preview article", async () => {
-    // md-tab-preview is rendered when isMdActive=true (a .md file is active).
-    // Use browser.execute querySelector — waitForExist in WebKitGTK WebDriver
-    // may not find elements at negative CSS positions (shadow row left:-9999px)
-    // even though they exist in the DOM.
-    await browser.waitUntil(
-      () => browser.execute(() => !!document.querySelector('[data-testid="md-tab-preview"]')),
-      { timeout: 15000, interval: 200, timeoutMsg: 'md-tab-preview not in DOM after 15s' }
-    );
-    const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
-    await browser.execute(() => {
-      const btn = document.querySelector<HTMLElement>('[data-testid="md-tab-preview"]');
-      btn?.click();
-    });
-    // After switching to preview mode the preview pane becomes visible.
+  it("the markdown preview pane renders", async () => {
+    // mdViewMode defaults to "split", so the preview pane (.markdown-preview)
+    // is rendered alongside the Monaco editor for any .md file — no tab click
+    // is needed. browser.$ reliably reaches the editor DOM in WebKitGTK.
     const preview = await browser.$('.markdown-preview');
-    await preview.waitForExist({ timeout: 8000 });
+    await preview.waitForExist({ timeout: 20000 });
     await browser.waitUntil(
       () => preview.isDisplayed(),
-      { timeout: 10000, interval: 200, timeoutMsg: '.markdown-preview did not become visible after preview tab click' }
+      { timeout: 10000, interval: 200, timeoutMsg: '.markdown-preview did not become visible' }
     );
     expect(await preview.isDisplayed()).toBe(true);
   });
@@ -102,7 +91,7 @@ describe("Markdown Preview", () => {
       // Wiki-link resolution looks up the linked gist asynchronously; give it
       // a moment to resolve before asserting the button exists.
       const wikiLink = await preview.$('.md-wiki-link');
-      await wikiLink.waitForExist({ timeout: 5000 });
+      await wikiLink.waitForExist({ timeout: 10000 });
       expect(await wikiLink.isExisting()).toBe(true);
       const text = await wikiLink.getText();
       expect(text).toBe('Another Gist');

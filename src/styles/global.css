@@ -517,7 +517,7 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
 /* Shadow row: position:absolute keeps it out of document flow; used only for measurement */
 .overflow-actions__shadow {
   position: absolute;
-  top: 0;
+  top: -9999px;
   left: -9999px;
   display: flex;
   align-items: center;
