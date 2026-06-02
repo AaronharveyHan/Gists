@@ -57,12 +57,14 @@ describe("Markdown Preview", () => {
 
   it("toggling preview renders the markdown-preview article", async () => {
     // md-tab-preview is rendered when isMdActive=true (a .md file is active).
-    // Use waitForExist (not waitForDisplayed) because in WebKitGTK the button
-    // may momentarily have zero layout dimensions during reflow, causing
-    // waitForDisplayed to time out even though the element is in the DOM.
-    // Click via JS for the same reason — bypasses WebDriver interactability check.
+    // Use browser.execute querySelector — waitForExist in WebKitGTK WebDriver
+    // may not find elements at negative CSS positions (shadow row left:-9999px)
+    // even though they exist in the DOM.
+    await browser.waitUntil(
+      () => browser.execute(() => !!document.querySelector('[data-testid="md-tab-preview"]')),
+      { timeout: 15000, interval: 200, timeoutMsg: 'md-tab-preview not in DOM after 15s' }
+    );
     const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
-    await previewBtn.waitForExist({ timeout: 8000 });
     await browser.execute(() => {
       const btn = document.querySelector<HTMLElement>('[data-testid="md-tab-preview"]');
       btn?.click();

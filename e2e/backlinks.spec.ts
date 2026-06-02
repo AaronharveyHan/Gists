@@ -63,13 +63,13 @@ describe("Backlinks Panel", () => {
 
     // The backlinks button is rendered in both the OverflowActions shadow
     // measurement row (.overflow-actions__shadow) and the visible row
-    // (.overflow-actions).  The plain data-testid selector (no parent
-    // qualifier) matches the shadow-row copy which is always in the DOM
-    // regardless of whether the button is currently visible or collapsed into
-    // the ⋯ overflow menu.
-    const backlinksBtn = await browser.$('[data-testid="backlinks-btn"]');
-    await backlinksBtn.waitForExist({ timeout: 10000 });
-    expect(await backlinksBtn.isExisting()).toBe(true);
+    // (.overflow-actions).  Use browser.execute querySelector — waitForExist
+    // in WebKitGTK WebDriver may not find elements at negative CSS positions
+    // (the shadow row uses left:-9999px) even though they exist in the DOM.
+    await browser.waitUntil(
+      () => browser.execute(() => !!document.querySelector('[data-testid="backlinks-btn"]')),
+      { timeout: 30000, interval: 200, timeoutMsg: 'backlinks-btn not in DOM after 30s' }
+    );
   });
 
   it("clicking the backlinks button opens the panel", async () => {
