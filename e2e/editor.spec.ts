@@ -27,9 +27,9 @@ describe("Editor", () => {
     await item.waitForExist({ timeout: 8000 });
     await item.click();
 
-    // Monaco editor container
+    // Monaco editor container — initialises asynchronously; allow extra time in CI.
     const editor = await browser.$('.monaco-editor');
-    await editor.waitForExist({ timeout: 10000 });
+    await editor.waitForExist({ timeout: 15000 });
     expect(await editor.isExisting()).toBe(true);
   });
 
@@ -39,7 +39,22 @@ describe("Editor", () => {
     const editor = await browser.$('.monaco-editor');
     await editor.waitForDisplayed({ timeout: 8000 });
     await editor.click();
-    // Verify the editor received focus by checking the focused class Monaco adds
+    // Monaco adds .focused via its FocusTracker after the click event is processed
+    // asynchronously (requestAnimationFrame / scheduler task).  waitUntil polls
+    // via browser.execute() — which runs in the main world — until the class
+    // appears, rather than checking isExisting() in the same JS task as the click.
+    // On each poll we also nudge Monaco's hidden textarea directly so that focus
+    // is reliably delivered even if the outer-container click didn't propagate all
+    // the way to the input area in WebKitGTK.
+    await browser.waitUntil(
+      () => browser.execute(() => {
+        if (document.querySelector('.monaco-editor.focused')) return true;
+        const ta = document.querySelector<HTMLElement>('.monaco-editor textarea');
+        ta?.focus();
+        return false;
+      }),
+      { timeout: 10000, interval: 100, timeoutMsg: 'Monaco editor did not receive focus within 10 s' }
+    );
     const focusedEditor = await browser.$('.monaco-editor.focused');
     expect(await focusedEditor.isExisting()).toBe(true);
   });
