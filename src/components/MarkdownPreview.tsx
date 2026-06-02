@@ -6,7 +6,7 @@
  */
 import { Children, isValidElement, useState, type ReactNode } from "react";
 import type { Components } from "react-markdown";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MermaidBlock } from "./MermaidBlock";
 import { resolveWikiLink } from "../api/tauri";
@@ -158,6 +158,7 @@ export function MarkdownPreview({
         remarkPlugins={[remarkGfm]}
         components={markdownComponents}
         skipHtml={true}
+        urlTransform={(url) => url.startsWith("gist://") ? url : defaultUrlTransform(url)}
       >
         {preprocessWikiLinks(markdown)}
       </ReactMarkdown>

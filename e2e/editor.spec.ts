@@ -88,19 +88,19 @@ describe("Editor", () => {
   });
 
   it("the preview toggle button renders in the toolbar", async () => {
-    // Re-select the gist so the editor state is clean after previous test interactions.
-    const item = await browser.$('.gist-item');
-    if (await item.isExisting()) {
-      await item.click();
-      await browser.$('.monaco-editor').waitForExist({ timeout: 10000 });
-    }
+    // Refresh so React re-mounts with clean state — previous typing/save tests
+    // leave the editor in an intermediate state under WebKitGTK where isMdActive
+    // ends up false even though activeFile is still "editor-test.md".
+    // After a fresh load, loadGists() auto-selects the draft, the Editor mounts,
+    // setActiveFile("editor-test.md") fires, and isMdActive becomes true.
+    await browser.refresh();
+    await skipOnboardingIfShown();
 
-    // md-tab-preview is rendered whenever a .md file is active (isMdActive).
-    // Use browser.$ (WebDriver findElement) — it reliably reaches the editor
-    // DOM in WebKitGTK, whereas browser.execute() targets a JS context that
-    // does NOT see the editor (only the sidebar/gist-list is visible there).
+    // md-tab-preview is inside editor__md-tabs, rendered when isMdActive=true.
+    // browser.$ reaches the editor DOM reliably in WebKitGTK.
+    await browser.$('.monaco-editor').waitForExist({ timeout: 20000 });
     const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
-    await previewBtn.waitForExist({ timeout: 20000 });
+    await previewBtn.waitForExist({ timeout: 15000 });
     expect(await previewBtn.isExisting()).toBe(true);
   });
 });
