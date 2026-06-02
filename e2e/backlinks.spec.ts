@@ -57,17 +57,24 @@ describe("Backlinks Panel", () => {
     }
     expect(found).toBe(true);
 
-    // Use .overflow-actions selector to find the visible toolbar button only.
-    // The same button also renders in the shadow measurement row
-    // (.overflow-actions__shadow, visibility:hidden) which comes first in DOM
-    // order — clicking that row throws "element not interactable".
+    // Wait for Monaco to mount — OverflowActions is sibling to Monaco in
+    // editor__toolbar, so once Monaco is in the DOM the toolbar is fully rendered.
+    await browser.$('.monaco-editor').waitForExist({ timeout: 15000 });
+
+    // The backlinks button is inside .overflow-actions (the VISIBLE toolbar row).
+    // The same node also renders in .overflow-actions__shadow (for measurement,
+    // visibility:hidden) — that row comes first in DOM order.
+    // After clicking a gist item, OverflowActions runs a ResizeObserver layout
+    // pass which briefly sets all items to display:none (initialWidth=0) then
+    // re-measures. waitForDisplayed tolerates this transient hidden state.
     const backlinksBtn = await browser.$('.overflow-actions [data-testid="backlinks-btn"]');
-    await backlinksBtn.waitForExist({ timeout: 8000 });
-    expect(await backlinksBtn.isExisting()).toBe(true);
+    await backlinksBtn.waitForDisplayed({ timeout: 10000 });
+    expect(await backlinksBtn.isDisplayed()).toBe(true);
   });
 
   it("clicking the backlinks button opens the panel", async () => {
     const backlinksBtn = await browser.$('.overflow-actions [data-testid="backlinks-btn"]');
+    await backlinksBtn.waitForClickable({ timeout: 10000 });
     await backlinksBtn.click();
 
     const panel = await browser.$('[data-testid="backlinks-panel"]');

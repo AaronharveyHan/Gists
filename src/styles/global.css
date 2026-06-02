@@ -527,7 +527,7 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
   pointer-events: none;
   user-select: none;
 }
-.overflow-actions__shadow-item { display: contents; }
+.overflow-actions__shadow-item { display: inline-flex; align-items: center; }
 
 /* ⋯ button */
 .overflow-actions__more-wrap { position: relative; flex-shrink: 0; }

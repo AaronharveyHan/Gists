@@ -48,22 +48,27 @@ describe("Markdown Preview", () => {
     }
     expect(found).toBe(true);
 
+    // Monaco initialises asynchronously; give it extra time in CI environments
+    // where CPU contention can slow the editor bundle's startup.
     const editor = await browser.$('.monaco-editor');
-    await editor.waitForExist({ timeout: 8000 });
+    await editor.waitForExist({ timeout: 15000 });
     expect(await editor.isExisting()).toBe(true);
   });
 
   it("toggling preview renders the markdown-preview article", async () => {
-    // Click the preview toggle button (md-tab-preview appears for .md files)
-    const previewBtn = await browser.$(
-      '[data-testid="md-tab-preview"], .editor__preview-btn, button[title*="Preview"]'
+    // md-tab-preview is rendered only when isMdActive=true (a .md file is active).
+    // Wait for the tab to appear; the editor component renders tabs before Monaco.
+    const previewBtn = await browser.$('[data-testid="md-tab-preview"]');
+    await previewBtn.waitForDisplayed({ timeout: 8000 });
+    await previewBtn.click();
+    // After switching to preview mode the preview pane becomes visible.
+    const preview = await browser.$('.markdown-preview');
+    await preview.waitForExist({ timeout: 8000 });
+    await browser.waitUntil(
+      () => preview.isDisplayed(),
+      { timeout: 10000, interval: 200, timeoutMsg: '.markdown-preview did not become visible after preview tab click' }
     );
-    if (await previewBtn.isExisting()) {
-      await previewBtn.click();
-      const preview = await browser.$('.markdown-preview');
-      await preview.waitForExist({ timeout: 8000 });
-      expect(await preview.isDisplayed()).toBe(true);
-    }
+    expect(await preview.isDisplayed()).toBe(true);
   });
 
   it("rendered markdown contains the heading", async () => {

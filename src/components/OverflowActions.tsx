@@ -67,7 +67,7 @@ export function OverflowActions({ items }: { items: OverflowItem[] }) {
 
     const totalW = cur.reduce((s, i) => s + (widths.get(i.key) ?? 0), 0);
 
-    if (totalW <= containerW) {
+    if (totalW <= containerW || containerW === 0) {
       // Only update state if it actually changed to avoid a spurious re-render.
       setHiddenKeys((prev) => (prev.size === 0 ? prev : new Set()));
       return;
