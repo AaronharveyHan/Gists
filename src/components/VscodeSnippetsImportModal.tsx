@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import * as api from "../api/tauri";
 import type { VscodeSnippet } from "../api/tauri";
 import { notify } from "../store/useNotificationStore";
+import { useT } from "../store/useI18nStore";
 
 export function VscodeSnippetsImportModal({
   onClose,
@@ -10,6 +11,7 @@ export function VscodeSnippetsImportModal({
   onClose: () => void;
   onImported: () => void;
 }) {
+  const t = useT();
   const [path, setPath] = useState<string | null>(null);
   const [snippets, setSnippets] = useState<VscodeSnippet[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -26,24 +28,6 @@ export function VscodeSnippetsImportModal({
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
 
-  // Try the default VS Code path on first mount.
-  useEffect(() => {
-    (async () => {
-      try {
-        const def = await api.vscodeSnippetsDefaultPath();
-        if (def) {
-          await loadFrom(def);
-        } else {
-          setLoading(false);
-          setError("Could not auto-detect VS Code snippets folder. Click 'Pick folder…' below.");
-        }
-      } catch (e) {
-        setLoading(false);
-        setError(String(e));
-      }
-    })();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   const loadFrom = async (p: string) => {
     setLoading(true);
     setError(null);
@@ -53,7 +37,7 @@ export function VscodeSnippetsImportModal({
       setSelected(new Set(list.map((_, i) => i)));
       setPath(p);
       if (list.length === 0) {
-        setError(`No snippets found in ${p}`);
+        setError(t.vscodeImport.noSnippets(p));
       }
     } catch (e) {
       setError(String(e));
@@ -64,10 +48,28 @@ export function VscodeSnippetsImportModal({
     }
   };
 
+  // Try the default VS Code path on first mount.
+  useEffect(() => {
+    (async () => {
+      try {
+        const def = await api.vscodeSnippetsDefaultPath();
+        if (def) {
+          await loadFrom(def);
+        } else {
+          setLoading(false);
+          setError(t.vscodeImport.autoDetectFailed);
+        }
+      } catch (e) {
+        setLoading(false);
+        setError(String(e));
+      }
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const pickFolder = async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
-      title: "Choose a VS Code snippets folder or file",
+      title: t.vscodeImport.pickFolderTitle,
       directory: true,
       multiple: false,
     });
@@ -77,7 +79,7 @@ export function VscodeSnippetsImportModal({
   const pickFile = async () => {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const picked = await open({
-      title: "Choose a VS Code snippets file",
+      title: t.vscodeImport.pickFileTitle,
       multiple: false,
       filters: [
         { name: "VS Code snippets", extensions: ["json", "code-snippets"] },
@@ -129,11 +131,11 @@ export function VscodeSnippetsImportModal({
     setImporting(true);
     try {
       const n = await api.vscodeSnippetsImport(items);
-      notify(`Imported ${n} VS Code snippet${n !== 1 ? "s" : ""} as templates`, "success");
+      notify(t.vscodeImport.imported(n), "success");
       onImported();
       onClose();
     } catch (e) {
-      notify("Import failed: " + String(e));
+      notify(t.vscodeImport.importFailed(String(e)));
     } finally {
       setImporting(false);
     }
@@ -152,18 +154,18 @@ export function VscodeSnippetsImportModal({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="vsc-import__head">
-          <h2>Import VS Code Snippets</h2>
+          <h2>{t.vscodeImport.title}</h2>
           <button className="btn vsc-import__close" onClick={onClose}>×</button>
         </div>
 
         <div className="vsc-import__source">
-          <span className="vsc-import__source-label">Source:</span>
+          <span className="vsc-import__source-label">{t.vscodeImport.sourceLabel}</span>
           <code className="vsc-import__source-path">{path ?? "—"}</code>
-          <button className="btn" onClick={pickFolder}>Pick folder…</button>
-          <button className="btn" onClick={pickFile}>Pick file…</button>
+          <button className="btn" onClick={pickFolder}>{t.vscodeImport.pickFolder}</button>
+          <button className="btn" onClick={pickFile}>{t.vscodeImport.pickFile}</button>
         </div>
 
-        {loading && <p className="vsc-import__status">Loading snippets…</p>}
+        {loading && <p className="vsc-import__status">{t.vscodeImport.loadingSnippets}</p>}
         {error && !loading && <p className="vsc-import__error">{error}</p>}
 
         {!loading && snippets.length > 0 && (
@@ -171,7 +173,7 @@ export function VscodeSnippetsImportModal({
             <div className="vsc-import__toolbar">
               <input
                 className="vsc-import__search"
-                placeholder="Filter by name, prefix, language…"
+                placeholder={t.vscodeImport.filterPlaceholder}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
@@ -181,10 +183,10 @@ export function VscodeSnippetsImportModal({
                   checked={allFilteredSelected}
                   onChange={toggleAll}
                 />
-                {allFilteredSelected ? "Deselect all" : "Select all"}
+                {allFilteredSelected ? t.vscodeImport.deselectAll : t.vscodeImport.selectAll}
               </label>
               <span className="vsc-import__count">
-                {selected.size} / {snippets.length} selected
+                {t.vscodeImport.selectedCount(selected.size, snippets.length)}
               </span>
             </div>
 
@@ -206,7 +208,7 @@ export function VscodeSnippetsImportModal({
                         <span className="vsc-import__prefix">⌨ {s.prefix}</span>
                       )}
                       <span className="vsc-import__lines">
-                        {s.body.split("\n").length} lines
+                        {t.vscodeImport.linesCount(s.body.split("\n").length)}
                       </span>
                     </div>
                     {s.description && (
@@ -225,15 +227,15 @@ export function VscodeSnippetsImportModal({
 
         <div className="vsc-import__actions">
           <span className="vsc-import__hint">
-            Tabstops like <code>$1</code> and <code>${"{1:default}"}</code> are preserved as-is.
+            {t.vscodeImport.tabstopHint}
           </span>
-          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={onClose}>{t.vscodeImport.cancel}</button>
           <button
             className="btn btn--primary"
             onClick={handleImport}
             disabled={importing || selected.size === 0}
           >
-            {importing ? "Importing…" : `Import ${selected.size} as templates`}
+            {importing ? t.vscodeImport.importing : t.vscodeImport.importBtn(selected.size)}
           </button>
         </div>
       </div>

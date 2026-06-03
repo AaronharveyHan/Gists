@@ -5,6 +5,7 @@ pub mod db;
 pub mod diff;
 pub mod embedding;
 pub mod github;
+pub mod local_embedding;
 pub mod models;
 pub mod runner;
 pub mod search_parser;

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useGistStore } from "../store/useGistStore";
 import { listGists } from "../api/tauri";
 import type { Gist } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 interface SearchHit {
   gistId: string;
@@ -46,6 +47,7 @@ function searchContent(
 
 export function ContentSearch({ onClose }: { onClose: () => void }) {
   const { selectGist } = useGistStore();
+  const t = useT();
   const [query, setQuery] = useState("");
   const [allGists, setAllGists] = useState<Gist[]>([]);
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -110,26 +112,26 @@ export function ContentSearch({ onClose }: { onClose: () => void }) {
           ref={inputRef}
           className="content-search__input"
           type="text"
-          placeholder="Search in files..."
+          placeholder={t.contentSearch.placeholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
         {query && (
           <span className="content-search__count">
-            {hits.length}{hits.length >= 200 ? "+" : ""} results
+            {t.contentSearch.resultsCount(hits.length, hits.length >= 200)}
           </span>
         )}
         <button
           className="content-search__close"
           onClick={onClose}
-          title="Close (Esc)"
+          title={t.contentSearch.closeEsc}
         >
           ✕
         </button>
       </div>
       <div className="content-search__results" ref={listRef}>
         {query && hits.length === 0 && (
-          <p className="content-search__empty">No results found</p>
+          <p className="content-search__empty">{t.contentSearch.noResults}</p>
         )}
         {Object.entries(grouped).map(([key, fileHits]) => {
           const first = fileHits[0];

@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../api/tauri";
 import type { GistFile, GistRevisionView } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 // ── Unified diff parser ───────────────────────────────────────────────────────
 // Handles output from `similar` crate: starts with "--- a/…" / "+++ b/…",
@@ -96,11 +97,11 @@ function parseUnifiedDiff(diff: string): ParsedDiffFile[] {
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
 
-function formatRelativeTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso || "—";
-  const diffSec = Math.round((t - Date.now()) / 1000);
-  const rtf = new Intl.RelativeTimeFormat("zh-CN", { numeric: "auto" });
+function formatRelativeTime(iso: string, locale: string): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return iso || "—";
+  const diffSec = Math.round((ts - Date.now()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
   const a = Math.abs(diffSec);
   if (a < 60) return rtf.format(Math.round(diffSec), "second");
   if (a < 3600) return rtf.format(Math.round(diffSec / 60), "minute");
@@ -110,11 +111,11 @@ function formatRelativeTime(iso: string): string {
   return rtf.format(Math.round(diffSec / (86400 * 365)), "year");
 }
 
-function formatLastActive(iso: string): string | null {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return null;
-  const diffSec = Math.round((t - Date.now()) / 1000);
-  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+function formatLastActive(iso: string, locale: string, label: (rel: string) => string): string | null {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return null;
+  const diffSec = Math.round((ts - Date.now()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
   const a = Math.abs(diffSec);
   let rel: string;
   if (a < 60) rel = rtf.format(Math.round(diffSec), "second");
@@ -123,7 +124,7 @@ function formatLastActive(iso: string): string | null {
   else if (a < 86400 * 30) rel = rtf.format(Math.round(diffSec / 86400), "day");
   else if (a < 86400 * 365) rel = rtf.format(Math.round(diffSec / (86400 * 30)), "month");
   else rel = rtf.format(Math.round(diffSec / (86400 * 365)), "year");
-  return `Last active ${rel}`;
+  return label(rel);
 }
 
 // ── Diff table renderer ───────────────────────────────────────────────────────
@@ -137,8 +138,9 @@ function lineClass(kind: DiffLineKind): string {
 }
 
 function DiffTable({ diff }: { diff: string }) {
+  const t = useT();
   const trimmed = diff.trim();
-  if (!trimmed) return <p className="modal__muted">(no changes)</p>;
+  if (!trimmed) return <p className="modal__muted">{t.diff.noChanges}</p>;
 
   const files = parseUnifiedDiff(diff);
   if (files.length === 0) {
@@ -153,9 +155,9 @@ function DiffTable({ diff }: { diff: string }) {
           <table className="diff-table">
             <thead>
               <tr>
-                <th className="diff-table__col-old">Old</th>
-                <th className="diff-table__col-new">New</th>
-                <th className="diff-table__col-code">Change</th>
+                <th className="diff-table__col-old">{t.diff.colOld}</th>
+                <th className="diff-table__col-new">{t.diff.colNew}</th>
+                <th className="diff-table__col-code">{t.diff.colChange}</th>
               </tr>
             </thead>
             <tbody>
@@ -207,6 +209,7 @@ export function DiffModal({
   primaryFilename,
   currentFiles,
 }: DiffModalProps) {
+  const t = useT();
   const [tab, setTab] = useState<"revisions" | "working">("revisions");
 
   // Revision list
@@ -291,8 +294,9 @@ export function DiffModal({
 
   if (!open) return null;
 
+  const locale = t.common.rtfLocale;
   const login = githubLogin ?? "…";
-  const lastActive = gistUpdatedAt ? formatLastActive(gistUpdatedAt) : null;
+  const lastActive = gistUpdatedAt ? formatLastActive(gistUpdatedAt, locale, t.diff.lastActive) : null;
 
   return (
     <div
@@ -312,14 +316,14 @@ export function DiffModal({
 
         {/* Tabs */}
         <div className="git-diff-panel__tabs">
-          {(["revisions", "working"] as const).map((t) => (
+          {(["revisions", "working"] as const).map((tb) => (
             <button
-              key={t}
+              key={tb}
               type="button"
-              className={`git-diff-panel__tab ${tab === t ? "git-diff-panel__tab--active" : ""}`}
-              onClick={() => setTab(t)}
+              className={`git-diff-panel__tab ${tab === tb ? "git-diff-panel__tab--active" : ""}`}
+              onClick={() => setTab(tb)}
             >
-              {t === "revisions" ? "Revisions" : "Working tree"}
+              {tb === "revisions" ? t.diff.tabRevisions : t.diff.tabWorking}
             </button>
           ))}
         </div>
@@ -329,7 +333,7 @@ export function DiffModal({
           <div className="git-diff-panel__body">
             {revisionsError && <p className="modal__error">{revisionsError}</p>}
             {revisionsLoading ? (
-              <p className="modal__muted">加载修订历史…</p>
+              <p className="modal__muted">{t.diff.loadingRevisions}</p>
             ) : (
               <div className="revision-timeline">
                 {revisions.map((rev, idx) => {
@@ -342,10 +346,10 @@ export function DiffModal({
                       <header
                         className="revision-card__head revision-card__head--clickable"
                         onClick={() => selectRevision(rev.sha, prevSha)}
-                        title={isSelected ? "收起" : "展开 diff"}
+                        title={isSelected ? t.diff.collapse : t.diff.expandDiff}
                       >
                         <div className="revision-card__title">
-                          @{rev.author_login} revised this gist {formatRelativeTime(rev.committed_at)}
+                          {t.diff.revisedBy(rev.author_login, formatRelativeTime(rev.committed_at, locale))}
                         </div>
                         <div className="revision-card__counts">
                           <span className="revision-card__sha">{rev.short_sha}</span>
@@ -360,11 +364,11 @@ export function DiffModal({
                       </header>
                       {isSelected && (
                         <div className="revision-card__diff">
-                          {revDiffLoading && <p className="modal__muted">加载 diff…</p>}
+                          {revDiffLoading && <p className="modal__muted">{t.diff.loadingDiff}</p>}
                           {revDiffError && <p className="modal__error">{revDiffError}</p>}
                           {!revDiffLoading && !revDiffError && (
                             <DiffTable
-                              diff={revDiff.trim() || "(No changes in this revision.)"}
+                              diff={revDiff.trim() || t.diff.noChangesInRevision}
                             />
                           )}
                         </div>
@@ -373,7 +377,7 @@ export function DiffModal({
                   );
                 })}
                 {!revisionsLoading && revisions.length === 0 && !revisionsError && (
-                  <p className="modal__muted">暂无提交记录。</p>
+                  <p className="modal__muted">{t.diff.noRevisions}</p>
                 )}
               </div>
             )}
@@ -385,14 +389,10 @@ export function DiffModal({
           <div className="git-diff-panel__body">
             {workingError && <p className="modal__error">{workingError}</p>}
             {workingLoading ? (
-              <p className="modal__muted">计算 diff…</p>
+              <p className="modal__muted">{t.diff.computingDiff}</p>
             ) : (
               <DiffTable
-                diff={
-                  workingDiff.trim()
-                    ? workingDiff
-                    : "(No changes — working tree matches remote snapshot.)"
-                }
+                diff={workingDiff.trim() ? workingDiff : t.diff.noChangesWorking}
               />
             )}
           </div>
@@ -400,7 +400,7 @@ export function DiffModal({
 
         <div className="modal__actions">
           <button type="button" className="btn btn--primary" onClick={onClose}>
-            Close
+            {t.diff.close}
           </button>
         </div>
       </div>

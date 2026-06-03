@@ -294,6 +294,24 @@ export const getEmbeddingStatus = (): Promise<EmbeddingProgress> =>
 export const startEmbeddingIndexer = (): Promise<void> =>
   invoke("start_embedding_indexer");
 
+// ── Local (offline) embeddings ─────────────────────────────────────────────────
+
+export interface LocalEmbeddingStatus {
+  /** Resolved directory where the model is/will be stored. */
+  dir: string;
+  /** Whether the model files already exist on disk. */
+  downloaded: boolean;
+  /** Whether the model is loaded into memory this session. */
+  loaded: boolean;
+}
+
+export const localEmbeddingStatus = (): Promise<LocalEmbeddingStatus> =>
+  invoke("local_embedding_status");
+
+/** Download (if needed) and initialise the local ONNX embedding model. */
+export const downloadLocalEmbeddingModel = (): Promise<void> =>
+  invoke("download_local_embedding_model");
+
 export interface AiMessage {
   role: "user" | "assistant" | "system";
   content: string;
@@ -343,6 +361,8 @@ export interface RunDone {
   stdout: string;
   stderr: string;
   duration_ms: number;
+  /** True if the archived stdout/stderr was clipped at the 100 KB cap. */
+  truncated: boolean;
 }
 
 export interface RunRecord {
@@ -356,6 +376,8 @@ export interface RunRecord {
   duration_ms: number;
   timed_out: boolean;
   killed: boolean;
+  /** True if the archived stdout/stderr was clipped at the 100 KB cap. */
+  truncated: boolean;
 }
 
 /** Start executing a file. Returns immediately; output arrives via run-line-{runId} events. */

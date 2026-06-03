@@ -52,7 +52,7 @@ export function MermaidBlock({ chart }: { chart: string }) {
 
     return () => {
       cancelled = true;
-      if (hostRef.current) hostRef.current.innerHTML = "";
+      if (host) host.innerHTML = "";
     };
   }, [chart]);
 

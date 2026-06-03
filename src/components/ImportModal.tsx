@@ -3,6 +3,7 @@ import { importPreview, importExecute } from "../api/tauri";
 import type { ImportPreviewItem } from "../api/tauri";
 import { useGistStore } from "../store/useGistStore";
 import { notify } from "../store/useNotificationStore";
+import { useT } from "../store/useI18nStore";
 
 type Phase = "loading" | "preview" | "importing" | "done" | "error";
 
@@ -14,6 +15,7 @@ export function ImportModal({
   onClose: () => void;
 }) {
   const { sync } = useGistStore();
+  const t = useT();
   const [phase, setPhase] = useState<Phase>("loading");
   const [items, setItems] = useState<ImportPreviewItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -66,7 +68,7 @@ export function ImportModal({
       const count = await importExecute(filePath, [...selected]);
       setImportedCount(count);
       setPhase("done");
-      notify(`Imported ${count} gist${count !== 1 ? "s" : ""}`, "success");
+      notify(t.importModal.imported(count), "success");
       // Refresh the list
       await sync(false);
     } catch (e) {
@@ -86,49 +88,49 @@ export function ImportModal({
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="modal import-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>Import Gists</h2>
+        <h2>{t.importModal.title}</h2>
 
         {phase === "loading" && (
-          <p className="import-modal__status">Reading backup file...</p>
+          <p className="import-modal__status">{t.importModal.readingFile}</p>
         )}
 
         {phase === "error" && (
           <div className="import-modal__error">
-            <p>Failed to process backup file:</p>
+            <p>{t.importModal.processError}</p>
             <pre>{errorMsg}</pre>
             <div className="modal__actions">
-              <button className="btn" onClick={onClose}>Close</button>
+              <button className="btn" onClick={onClose}>{t.diff.close}</button>
             </div>
           </div>
         )}
 
         {phase === "done" && (
           <div className="import-modal__done">
-            <p>Successfully imported {importedCount} gist{importedCount !== 1 ? "s" : ""}.</p>
+            <p>{t.importModal.successMsg(importedCount)}</p>
             <div className="modal__actions">
-              <button className="btn btn--primary" onClick={onClose}>Done</button>
+              <button className="btn btn--primary" onClick={onClose}>{t.common.done}</button>
             </div>
           </div>
         )}
 
         {phase === "importing" && (
           <p className="import-modal__status">
-            Creating gists on GitHub... ({selected.size} items)
+            {t.importModal.creating(selected.size)}
           </p>
         )}
 
         {phase === "preview" && (
           <>
             <div className="import-modal__summary">
-              <span>{items.length} gists in backup</span>
+              <span>{t.importModal.inBackup(items.length)}</span>
               {newCount > 0 && (
                 <span className="import-modal__badge import-modal__badge--new">
-                  {newCount} new
+                  {t.importModal.newBadge(newCount)}
                 </span>
               )}
               {existsCount > 0 && (
                 <span className="import-modal__badge import-modal__badge--exists">
-                  {existsCount} already exist
+                  {t.importModal.existsBadge(existsCount)}
                 </span>
               )}
             </div>
@@ -140,14 +142,11 @@ export function ImportModal({
                   checked={selected.size === items.length && items.length > 0}
                   onChange={toggleAll}
                 />
-                Select all
+                {t.importModal.selectAll}
               </label>
               {selected.size > 0 && (
                 <span className="import-modal__sel-info">
-                  {selected.size} selected
-                  {selectedNew > 0 && ` (${selectedNew} new`}
-                  {selectedExists > 0 && `, ${selectedExists} metadata-only`}
-                  {(selectedNew > 0 || selectedExists > 0) && ")"}
+                  {t.importModal.selectedInfo(selected.size, selectedNew, selectedExists)}
                 </span>
               )}
             </div>
@@ -182,11 +181,11 @@ export function ImportModal({
                         {item.tags.join(", ")}
                       </span>
                     )}
-                    {item.pinned && <span title="Pinned">pinned</span>}
+                    {item.pinned && <span title={t.importModal.pinned}>{t.importModal.pinned}</span>}
                     <span
                       className={`import-modal__item-status import-modal__item-status--${item.status}`}
                     >
-                      {item.status === "new" ? "New" : "Exists"}
+                      {item.status === "new" ? t.importModal.statusNew : t.importModal.statusExists}
                     </span>
                   </div>
                 </label>
@@ -194,18 +193,18 @@ export function ImportModal({
             </div>
 
             <div className="import-modal__hint">
-              <strong>New</strong> gists will be created on GitHub.{" "}
-              <strong>Existing</strong> gists will only have tags, pins, and categories restored.
+              <strong>{t.importModal.hintNewLabel}</strong>{t.importModal.hintNewDetail}{" "}
+              <strong>{t.importModal.hintExistingLabel}</strong>{t.importModal.hintExistingDetail}
             </div>
 
             <div className="modal__actions">
-              <button className="btn" onClick={onClose}>Cancel</button>
+              <button className="btn" onClick={onClose}>{t.importModal.cancel}</button>
               <button
                 className="btn btn--primary"
                 onClick={handleImport}
                 disabled={selected.size === 0}
               >
-                Import {selected.size} gist{selected.size !== 1 ? "s" : ""}
+                {t.importModal.importBtn(selected.size)}
               </button>
             </div>
           </>

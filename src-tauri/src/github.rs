@@ -208,6 +208,7 @@ struct CommitUser {
 struct CommitChangeStatus {
     additions: Option<u32>,
     deletions: Option<u32>,
+    total: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -238,7 +239,7 @@ pub async fn fetch_gist_commits(
                 sha,
                 author_login: c.user.login,
                 committed_at: c.committed_at,
-                files_changed: 0,
+                files_changed: c.change_status.as_ref().and_then(|s| s.total).unwrap_or(0),
                 additions: c.change_status.as_ref().and_then(|s| s.additions).unwrap_or(0),
                 deletions: c.change_status.as_ref().and_then(|s| s.deletions).unwrap_or(0),
             }

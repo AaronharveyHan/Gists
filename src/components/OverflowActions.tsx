@@ -9,6 +9,7 @@
  *   the container width changes.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useT } from "../store/useI18nStore";
 
 export interface OverflowItem {
   key: string;
@@ -34,6 +35,7 @@ export interface OverflowItem {
 
 export function OverflowActions({ items }: { items: OverflowItem[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const t = useT();
   const shadowRef = useRef<HTMLDivElement>(null);
   const moreWrapRef = useRef<HTMLDivElement>(null);
   const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set());
@@ -174,7 +176,7 @@ export function OverflowActions({ items }: { items: OverflowItem[] }) {
             <button
               className="btn overflow-actions__more-btn"
               onClick={() => setMenuOpen((o) => !o)}
-              title="更多操作"
+              title={t.overflowActions.moreActions}
               aria-haspopup="true"
               aria-expanded={menuOpen}
             >

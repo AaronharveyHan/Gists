@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { useThemeStore, PRESETS } from "../store/useThemeStore";
-import { getAiConfig, saveAiConfig, getSetting, saveSetting } from "../api/tauri";
+import {
+  getAiConfig, saveAiConfig, getSetting, saveSetting,
+  localEmbeddingStatus, downloadLocalEmbeddingModel,
+  type LocalEmbeddingStatus,
+} from "../api/tauri";
 import { useT, useI18nStore } from "../store/useI18nStore";
 import { AI_PROVIDERS, detectProvider } from "../data/aiProviders";
 import { initErrorReporting } from "../lib/errorReporting";
@@ -45,6 +49,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
 
+  // Embedding provider: "remote" (default, uses the API above) | "local" (offline ONNX).
+  const [embedProvider, setEmbedProvider] = useState<"remote" | "local">("remote");
+  const [localDir, setLocalDir] = useState<string>("");
+  const [localStatus, setLocalStatus] = useState<LocalEmbeddingStatus | null>(null);
+  const [localDownloading, setLocalDownloading] = useState(false);
+
   const [crashReporting, setCrashReporting] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [addingAccount, setAddingAccount] = useState(false);
@@ -54,14 +64,23 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [acctSaving, setAcctSaving] = useState(false);
 
   useEffect(() => {
+    // get_setting returns Ok(None) when absent, so a rejection here is a real
+    // DB/IPC failure, not an "unconfigured" state. A bad read just leaves the
+    // toggle at its default, so log it for diagnostics rather than toasting.
     getSetting("error_reporting_enabled").then((v) => {
       setCrashReporting(v === "true");
-    }).catch(() => {});
+    }).catch((e) => console.error("[settings] load error_reporting_enabled failed:", e));
   }, []);
 
   const handleCrashReportingToggle = (enabled: boolean) => {
     setCrashReporting(enabled);
-    saveSetting("error_reporting_enabled", enabled ? "true" : "false").catch(() => {});
+    // Persisting is an explicit user action — surface failure so they know the
+    // choice may not stick.
+    saveSetting("error_reporting_enabled", enabled ? "true" : "false")
+      .catch((e) => {
+        console.error("[settings] save error_reporting_enabled failed:", e);
+        notify(t.settings.saveSettingError, "error");
+      });
     // Reinit frontend Sentry immediately
     initErrorReporting(enabled);
     // Backend Sentry picks up the setting on next app launch
@@ -71,7 +90,10 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const loadAccounts = () =>
     listAccounts()
       .then(setAccounts)
-      .catch(() => {});
+      .catch((e) => {
+        console.error("[settings] load accounts failed:", e);
+        notify(t.settings.loadAccountsError, "error");
+      });
 
   useEffect(() => { loadAccounts(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -106,14 +128,74 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   };
 
   useEffect(() => {
+    // get_ai_config returns defaults for unset keys and only rejects on a real
+    // DB/IPC failure — so a rejection here is a genuine load failure, not an
+    // "unconfigured" state. Surface it instead of silently showing defaults.
     getAiConfig().then((cfg) => {
       setAiBaseUrl(cfg.base_url);
       setAiModel(cfg.model);
       setAiEmbeddingModel(cfg.embedding_model);
       setAiHasKey(cfg.has_key);
       setAiProviderId(detectProvider(cfg.base_url).id);
-    }).catch(() => {/* ignore if not configured yet */});
+    }).catch((e) => {
+      console.error("[settings] load AI config failed:", e);
+      notify(t.settings.loadConfigError, "error");
+    });
   }, []);
+
+  const refreshLocalStatus = () =>
+    localEmbeddingStatus()
+      .then((s) => { setLocalStatus(s); if (!localDir) setLocalDir(s.dir); })
+      .catch((e) => console.error("[settings] load local embedding status failed:", e));
+
+  useEffect(() => {
+    // These two reads share one failure toast: a DB failure breaks both, and we
+    // don't want to stack duplicate toasts on mount.
+    let embeddingLoadFailed = false;
+    getSetting("embedding_provider").then((v) => {
+      setEmbedProvider(v === "local" ? "local" : "remote");
+    }).catch((e) => {
+      console.error("[settings] load embedding_provider failed:", e);
+      embeddingLoadFailed = true;
+    });
+    getSetting("local_embedding_dir").then((v) => {
+      if (v) setLocalDir(v);
+    }).catch((e) => {
+      console.error("[settings] load local_embedding_dir failed:", e);
+      if (!embeddingLoadFailed) notify(t.settings.loadEmbeddingError, "error");
+    });
+    refreshLocalStatus();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleEmbedProviderChange = (next: "remote" | "local") => {
+    setEmbedProvider(next);
+    saveSetting("embedding_provider", next).catch((e) => {
+      console.error("[settings] save embedding_provider failed:", e);
+      notify(t.settings.saveSettingError, "error");
+    });
+    if (next === "local") refreshLocalStatus();
+  };
+
+  const handleLocalDirSave = (dir: string) => {
+    setLocalDir(dir);
+    saveSetting("local_embedding_dir", dir).catch((e) => {
+      console.error("[settings] save local_embedding_dir failed:", e);
+      notify(t.settings.saveSettingError, "error");
+    });
+  };
+
+  const handleDownloadModel = async () => {
+    setLocalDownloading(true);
+    try {
+      await downloadLocalEmbeddingModel();
+      notify(t.settings.localModelReady, "success");
+      await refreshLocalStatus();
+    } catch (e) {
+      notify(t.settings.localModelError + " " + String(e), "error");
+    } finally {
+      setLocalDownloading(false);
+    }
+  };
 
   const handleProviderPick = (id: string) => {
     const p = AI_PROVIDERS.find((x) => x.id === id);
@@ -457,6 +539,71 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               {aiSaving ? t.settings.saving : aiSaved ? t.settings.savedCheck : t.settings.saveAiConfig}
             </button>
           </div>
+
+          {/* ── Embedding backend: remote API vs local offline model ─────── */}
+          <div className="settings-row settings-row--col">
+            <label className="settings-label">
+              {t.settings.embedProviderLabel}
+              <span className="settings-hint" style={{ marginLeft: 6 }}>
+                {t.settings.embedProviderHint}
+              </span>
+            </label>
+            <div className="settings-segmented">
+              <button
+                type="button"
+                className={`settings-segmented__btn${embedProvider === "remote" ? " is-active" : ""}`}
+                onClick={() => handleEmbedProviderChange("remote")}
+              >
+                {t.settings.embedRemote}
+              </button>
+              <button
+                type="button"
+                className={`settings-segmented__btn${embedProvider === "local" ? " is-active" : ""}`}
+                onClick={() => handleEmbedProviderChange("local")}
+              >
+                {t.settings.embedLocal}
+              </button>
+            </div>
+          </div>
+
+          {embedProvider === "local" && (
+            <div className="settings-row settings-row--col">
+              <label className="settings-label">
+                {t.settings.localModelDir}
+                <span className="settings-hint" style={{ marginLeft: 6 }}>
+                  {t.settings.localModelDirHint}
+                </span>
+              </label>
+              <input
+                type="text"
+                className="settings-input"
+                value={localDir}
+                placeholder={localStatus?.dir ?? ""}
+                onChange={(e) => setLocalDir(e.target.value)}
+                onBlur={(e) => handleLocalDirSave(e.target.value.trim())}
+              />
+              <div className="settings-local-model">
+                <span className={`settings-local-model__badge${localStatus?.downloaded ? " is-ready" : ""}`}>
+                  {localStatus?.downloaded
+                    ? t.settings.localModelDownloaded
+                    : t.settings.localModelMissing}
+                </span>
+                {!localStatus?.downloaded && (
+                  <button
+                    type="button"
+                    className="btn"
+                    onClick={handleDownloadModel}
+                    disabled={localDownloading}
+                  >
+                    {localDownloading ? t.settings.localModelDownloading : t.settings.localModelDownload}
+                  </button>
+                )}
+              </div>
+              <div className="settings-warn settings-warn--info">
+                {t.settings.localModelNote}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* ── Accounts ─────────────────────────────────────────────── */}

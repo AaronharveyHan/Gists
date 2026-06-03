@@ -13,11 +13,14 @@
 import { useEffect, useState } from "react";
 import { useGistStore } from "../store/useGistStore";
 import type { Gist } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 // ── Copy button ───────────────────────────────────────────────────────────────
 
-function CopyButton({ value, label = "Copy" }: { value: string; label?: string }) {
+function CopyButton({ value, label }: { value: string; label?: string }) {
   const [copied, setCopied] = useState(false);
+  const t = useT();
+  const displayLabel = label ?? t.share.copy;
 
   const handleCopy = async () => {
     try {
@@ -43,9 +46,9 @@ function CopyButton({ value, label = "Copy" }: { value: string; label?: string }
     <button
       className={`share-modal__copy-btn ${copied ? "share-modal__copy-btn--copied" : ""}`}
       onClick={handleCopy}
-      title={copied ? "Copied!" : `Copy ${label}`}
+      title={copied ? t.share.copiedTitle : t.share.copyTitle(displayLabel)}
     >
-      {copied ? "✓ Copied" : label}
+      {copied ? t.share.copied : displayLabel}
     </button>
   );
 }
@@ -73,7 +76,7 @@ function ShareRow({
         >
           {value}
         </code>
-        <CopyButton value={value} label={copyLabel ?? "Copy"} />
+        <CopyButton value={value} label={copyLabel} />
       </div>
     </div>
   );
@@ -89,6 +92,7 @@ export function ShareModal({
   onClose: () => void;
 }) {
   const { githubLogin } = useGistStore();
+  const t = useT();
 
   // Close on Escape
   useEffect(() => {
@@ -126,17 +130,14 @@ export function ShareModal({
     >
       <div className="modal share-modal" onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal__header">
-          <h2 className="modal__title">Share / Embed</h2>
+          <h2 className="modal__title">{t.share.title}</h2>
           <button className="modal__close" onClick={onClose}>✕</button>
         </div>
 
         {isLocal ? (
           <div className="share-modal__local-notice">
             <span className="share-modal__local-icon">✎</span>
-            <p>
-              This is a <strong>local draft</strong> — it hasn't been published to GitHub yet.
-              Publish it first to get a shareable link.
-            </p>
+            <p>{t.share.localDraftNotice}</p>
           </div>
         ) : (
           <div className="share-modal__body">
@@ -144,45 +145,41 @@ export function ShareModal({
             {/* GitHub URL */}
             <section className="share-modal__section">
               <div className="share-modal__section-head">
-                <span className="share-modal__section-title">GitHub URL</span>
+                <span className="share-modal__section-title">{t.share.githubUrl}</span>
                 <button
                   className="share-modal__open-link"
                   onClick={() => openExternal(githubUrl)}
-                  title="Open in browser"
+                  title={t.share.openInBrowser}
                 >
-                  Open ↗
+                  {t.share.openLink}
                 </button>
               </div>
-              <ShareRow label="" value={githubUrl} copyLabel="Copy URL" />
+              <ShareRow label="" value={githubUrl} copyLabel={t.share.copyUrl} />
             </section>
 
             {/* HTML embed */}
             <section className="share-modal__section">
               <div className="share-modal__section-head">
-                <span className="share-modal__section-title">Embed (HTML)</span>
-                <span className="share-modal__section-hint">
-                  Paste in any webpage to render the gist
-                </span>
+                <span className="share-modal__section-title">{t.share.embedHtml}</span>
+                <span className="share-modal__section-hint">{t.share.embedHint}</span>
               </div>
-              <ShareRow label="" value={embedHtml} monospace copyLabel="Copy embed" />
+              <ShareRow label="" value={embedHtml} monospace copyLabel={t.share.copyEmbed} />
             </section>
 
             {/* Markdown */}
             <section className="share-modal__section">
               <div className="share-modal__section-head">
-                <span className="share-modal__section-title">Markdown link</span>
+                <span className="share-modal__section-title">{t.share.markdownLink}</span>
               </div>
-              <ShareRow label="" value={markdownLink} monospace copyLabel="Copy markdown" />
+              <ShareRow label="" value={markdownLink} monospace copyLabel={t.share.copyMarkdown} />
             </section>
 
             {/* Raw file URLs */}
             {rawFiles.length > 0 && (
               <section className="share-modal__section">
                 <div className="share-modal__section-head">
-                  <span className="share-modal__section-title">Raw file URLs</span>
-                  <span className="share-modal__section-hint">
-                    Direct link to file contents
-                  </span>
+                  <span className="share-modal__section-title">{t.share.rawUrls}</span>
+                  <span className="share-modal__section-hint">{t.share.rawHint}</span>
                 </div>
                 {rawFiles.map((f) => (
                   <ShareRow
@@ -190,7 +187,6 @@ export function ShareModal({
                     label={f.filename}
                     value={f.raw_url!}
                     monospace
-                    copyLabel="Copy"
                   />
                 ))}
               </section>

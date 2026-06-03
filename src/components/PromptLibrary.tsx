@@ -4,6 +4,7 @@ import { useGistStore } from "../store/useGistStore";
 import { notify } from "../store/useNotificationStore";
 import * as api from "../api/tauri";
 import type { Gist } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 // ── Variable helpers ──────────────────────────────────────────────────────────
 
@@ -29,6 +30,7 @@ function NewPromptForm({ onCreated }: { onCreated: (gist: Gist) => void }) {
   const [body, setBody]       = useState("");
   const [saving, setSaving]   = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
+  const t = useT();
 
   useEffect(() => { nameRef.current?.focus(); }, []);
 
@@ -41,7 +43,7 @@ function NewPromptForm({ onCreated }: { onCreated: (gist: Gist) => void }) {
       await api.setGistCategory(gist.id, "prompt");
       onCreated(gist);
     } catch (e) {
-      notify("Failed to create prompt: " + String(e));
+      notify(t.promptLib.createFailed(String(e)));
     } finally {
       setSaving(false);
     }
@@ -55,7 +57,7 @@ function NewPromptForm({ onCreated }: { onCreated: (gist: Gist) => void }) {
         <input
           ref={nameRef}
           className="prompt-lib__new-name"
-          placeholder="Prompt name…"
+          placeholder={t.promptLib.namePlaceholder}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
@@ -63,7 +65,7 @@ function NewPromptForm({ onCreated }: { onCreated: (gist: Gist) => void }) {
       </div>
       <textarea
         className="prompt-lib__new-body"
-        placeholder={"Write your prompt here.\nUse {{variable}} for placeholders."}
+        placeholder={t.promptLib.bodyPlaceholder}
         value={body}
         onChange={(e) => setBody(e.target.value)}
         rows={8}
@@ -71,7 +73,7 @@ function NewPromptForm({ onCreated }: { onCreated: (gist: Gist) => void }) {
       />
       {vars.length > 0 && (
         <div className="prompt-lib__new-vars">
-          <span className="prompt-lib__new-vars__label">Variables: </span>
+          <span className="prompt-lib__new-vars__label">{t.promptLib.variablesLabel}</span>
           {vars.map((v) => (
             <code key={v} className="prompt-lib__var-pill">{`{{${v}}}`}</code>
           ))}
@@ -83,7 +85,7 @@ function NewPromptForm({ onCreated }: { onCreated: (gist: Gist) => void }) {
           onClick={handleCreate}
           disabled={!name.trim() || !body.trim() || saving}
         >
-          {saving ? "Saving…" : "Create Prompt"}
+          {saving ? t.promptLib.saving : t.promptLib.createPrompt}
         </button>
       </div>
     </div>
@@ -103,13 +105,14 @@ function VarFillPanel({
   values: Record<string, string>;
   onChange: (name: string, value: string) => void;
 }) {
+  const t = useT();
   const preview = useMemo(() => renderTemplate(template, values), [template, values]);
 
   return (
     <div className="prompt-lib__vars">
       {vars.length > 0 && (
         <div className="prompt-lib__var-inputs">
-          <div className="prompt-lib__section-label">Fill variables</div>
+          <div className="prompt-lib__section-label">{t.promptLib.fillVariables}</div>
           {vars.map((v) => (
             <div key={v} className="prompt-lib__var-row">
               <label className="prompt-lib__var-label">
@@ -126,7 +129,7 @@ function VarFillPanel({
         </div>
       )}
       <div className="prompt-lib__preview">
-        <div className="prompt-lib__section-label">Preview</div>
+        <div className="prompt-lib__section-label">{t.promptLib.preview}</div>
         <pre className="prompt-lib__preview-text">{preview}</pre>
       </div>
     </div>
@@ -145,6 +148,7 @@ interface Props {
 
 export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
   const { gists, loadGists } = useGistStore();
+  const t = useT();
 
   const prompts = useMemo(
     () => gists.filter((g) => g.category === "prompt"),
@@ -196,6 +200,8 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const pl = t.promptLib;
+
   // Keyboard: Escape closes, ↑↓ navigate list
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { onClose(); return; }
@@ -221,9 +227,9 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style={{ marginRight: 6 }}>
               <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8Z"/>
             </svg>
-            Prompt Library
+            {pl.title}
           </span>
-          <button className="prompt-lib__close" onClick={onClose} title="Close (Esc)">×</button>
+          <button className="prompt-lib__close" onClick={onClose} title={pl.close}>×</button>
         </div>
 
         <div className="prompt-lib__body">
@@ -234,14 +240,14 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
               <input
                 ref={filterRef}
                 className="prompt-lib__search"
-                placeholder="Search prompts…"
+                placeholder={pl.searchPlaceholder}
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
               />
               <button
                 className="btn btn--primary prompt-lib__new-btn"
                 onClick={() => { setShowNew(true); setSelected(null); }}
-                title="New prompt"
+                title={pl.newPrompt}
               >
                 +
               </button>
@@ -251,9 +257,7 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
               <NewPromptForm onCreated={handleCreated} />
             ) : filtered.length === 0 ? (
               <div className="prompt-lib__empty">
-                {prompts.length === 0
-                  ? "No prompts yet. Create one or mark a gist as a prompt."
-                  : "No matching prompts."}
+                {prompts.length === 0 ? pl.noPromptsYet : pl.noMatchingPrompts}
               </div>
             ) : (
               <ul className="prompt-lib__list">
@@ -270,10 +274,10 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
                       </div>
                       <div className="prompt-lib__item-meta">
                         {v.length > 0 && (
-                          <span className="prompt-lib__item-vars">{v.length} var{v.length !== 1 ? "s" : ""}</span>
+                          <span className="prompt-lib__item-vars">{pl.varsCount(v.length)}</span>
                         )}
                         {p.local_only && (
-                          <span className="prompt-lib__item-local">local</span>
+                          <span className="prompt-lib__item-local">{pl.local}</span>
                         )}
                       </div>
                     </li>
@@ -290,7 +294,7 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
                 {selected.description || selected.files[0]?.filename}
               </div>
 
-              {vars.length > 0 || true ? (
+              {vars.length > 0 ? (
                 <VarFillPanel
                   template={template}
                   vars={vars}
@@ -304,21 +308,21 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
                   <button
                     className="btn btn--primary"
                     onClick={() => { onInsert(rendered); onClose(); }}
-                    title="Insert rendered prompt into chat"
+                    title={pl.insertTooltip}
                   >
-                    Insert into Chat
+                    {pl.insertIntoChat}
                   </button>
                 )}
                 <button className="btn" onClick={handleCopy}>
-                  {copied ? "Copied!" : "Copy"}
+                  {copied ? pl.copied : pl.copy}
                 </button>
                 {onNavigate && (
                   <button
                     className="btn btn--ghost"
                     onClick={() => { onNavigate(selected.id); onClose(); }}
-                    title="Open in editor"
+                    title={pl.editTooltip}
                   >
-                    Edit ↗
+                    {pl.edit}
                   </button>
                 )}
               </div>
@@ -328,19 +332,19 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
           {/* Placeholder when no selection and not in new-form mode */}
           {!showNew && !selected && prompts.length > 0 && (
             <div className="prompt-lib__detail-pane prompt-lib__detail-pane--empty">
-              <div className="prompt-lib__empty">Select a prompt to preview.</div>
+              <div className="prompt-lib__empty">{pl.selectPrompt}</div>
             </div>
           )}
         </div>
 
         <div className="prompt-lib__footer">
           <span className="prompt-lib__footer-hint">
-            <kbd>↑↓</kbd> navigate &nbsp;·&nbsp;
-            <kbd>Esc</kbd> close
+            <kbd>↑↓</kbd> {pl.footerNavigate} &nbsp;·&nbsp;
+            <kbd>Esc</kbd> {pl.footerClose}
           </span>
           {onNavigate && (
             <span className="prompt-lib__footer-hint">
-              Tip: mark any gist as a prompt via the editor toolbar.
+              {pl.footerTip}
             </span>
           )}
         </div>

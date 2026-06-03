@@ -5,6 +5,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { Gist } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 // ── Language helpers ──────────────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ function detectLang(text: string): string | null {
   if (/\bdef\s+\w+\(/.test(t) || /^\s*class\s+\w+:/m.test(t)) return "Python";
   if (/\b(const|let|var)\s+\w+\s*=/.test(t) || /=>\s*\{/.test(t) || /require\(/.test(t)) return "JavaScript";
   if (/^\s*[a-zA-Z-]+:\s+.+/m.test(t) && /\n\s{2,}/.test(t)) return "YAML";
-  if (/^\s*[\[{]/.test(t.trim())) { try { JSON.parse(text); return "JSON"; } catch {} }
+  if (/^\s*[[{]/.test(t.trim())) { try { JSON.parse(text); return "JSON"; } catch {} }
   if (/^#{1,6}\s/.test(t) || /\[.*\]\(https?:\/\//.test(t))   return "Markdown";
   if (/\|\s*grep\b/.test(t) || /\bsudo\b/.test(t) || /^\$\s/.test(t)) return "Shell";
   if (/<[a-zA-Z][^>]*>/.test(t) && /<\/[a-zA-Z]+>/.test(t))  return "HTML";
@@ -75,6 +76,7 @@ function makeFilename(title: string, lang: string | null): string {
 // ── Search mode ───────────────────────────────────────────────────────────────
 
 function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
+  const t = useT();
   const [query, setQuery]     = useState("");
   const [results, setResults] = useState<Gist[]>([]);
   const [selected, setSelected] = useState(0);
@@ -153,15 +155,15 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
         <input
           ref={inputRef}
           className="qs__input"
-          placeholder="Search gists…"
+          placeholder={t.quickSearch.searchPlaceholder}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           spellCheck={false}
           autoComplete="off"
         />
-        {feedback === "copied" && <span className="qs__badge qs__badge--green">Copied!</span>}
-        {feedback === "opened" && <span className="qs__badge qs__badge--blue">Opened</span>}
+        {feedback === "copied" && <span className="qs__badge qs__badge--green">{t.quickSearch.copied}</span>}
+        {feedback === "opened" && <span className="qs__badge qs__badge--blue">{t.quickSearch.opened}</span>}
       </div>
 
       {results.length > 0 ? (
@@ -178,7 +180,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
                 <div className="qs__item-top">
                   <span className="qs__item-title">{gistTitle(g)}</span>
                   <div className="qs__item-meta">
-                    {!g.public && <span className="qs__item-secret">secret</span>}
+                    {!g.public && <span className="qs__item-secret">{t.quickSearch.secret}</span>}
                     {file?.language && (
                       <span className="qs__item-lang" style={{ background: langColor(file.language) }}>
                         {langAbbr(file.language)}
@@ -195,15 +197,15 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
           })}
         </ul>
       ) : (
-        <div className="qs__empty">{query ? "No results" : "Start typing to search…"}</div>
+        <div className="qs__empty">{query ? t.quickSearch.noResults : t.quickSearch.startTyping}</div>
       )}
 
       <div className="qs__footer">
-        <span className="qs__hint"><kbd>↑↓</kbd> navigate</span>
-        <span className="qs__hint"><kbd>↵</kbd> copy</span>
-        <span className="qs__hint"><kbd>⌘↵</kbd> open</span>
-        <span className="qs__hint"><kbd>Tab</kbd> capture</span>
-        <span className="qs__hint"><kbd>⎋</kbd> close</span>
+        <span className="qs__hint"><kbd>↑↓</kbd> {t.quickSearch.footerNavigate}</span>
+        <span className="qs__hint"><kbd>↵</kbd> {t.quickSearch.footerCopy}</span>
+        <span className="qs__hint"><kbd>⌘↵</kbd> {t.quickSearch.footerCmdOpen}</span>
+        <span className="qs__hint"><kbd>Tab</kbd> {t.quickSearch.footerCapture}</span>
+        <span className="qs__hint"><kbd>⎋</kbd> {t.quickSearch.footerClose}</span>
       </div>
     </>
   );
@@ -212,6 +214,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
 // ── Capture mode ──────────────────────────────────────────────────────────────
 
 function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
+  const t = useT();
   const [title,    setTitle]   = useState("");
   const [content,  setContent] = useState("");
   const [language, setLang]    = useState<string | null>(null);
@@ -287,7 +290,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
     return (
       <div className="qs__capture-saved">
         <div className="qs__capture-saved__icon">✓</div>
-        <div className="qs__capture-saved__label">Saved as draft</div>
+        <div className="qs__capture-saved__label">{t.quickSearch.savedAsDraft}</div>
       </div>
     );
   }
@@ -302,7 +305,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
         <input
           ref={titleRef}
           className="qs__capture-title"
-          placeholder="Description or title…"
+          placeholder={t.quickSearch.captureTitlePlaceholder}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           spellCheck={false}
@@ -310,7 +313,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
         <span
           className="qs__capture-lang-badge"
           style={{ background: langColor(language) }}
-          title={language ?? "Unknown language"}
+          title={language ?? t.quickSearch.unknownLang}
         >
           {langAbbr(language)}
         </span>
@@ -318,7 +321,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
 
       {/* Filename hint */}
       <div className="qs__capture-filename">
-        <span className="qs__capture-filename__label">File:</span>
+        <span className="qs__capture-filename__label">{t.quickSearch.captureFileLabel}</span>
         <code className="qs__capture-filename__name">{filename}</code>
       </div>
 
@@ -329,8 +332,8 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
         ) : (
           <div className="qs__capture-no-content">
             <div className="qs__capture-no-content__icon">⎘</div>
-            <div>Copy code or text to clipboard,</div>
-            <div>then press <kbd>Alt+Shift+Space</kbd></div>
+            <div>{t.quickSearch.noContentLine1}</div>
+            <div>{t.quickSearch.noContentLine2} <kbd>Alt+Shift+Space</kbd></div>
           </div>
         )}
       </div>
@@ -346,7 +349,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
           disabled={!content.trim() || saving}
           title="Save as local draft  ⌘↵"
         >
-          {saving ? "Saving…" : "Save Draft"}
+          {saving ? t.quickSearch.saving : t.quickSearch.saveDraft}
         </button>
         <button
           className="qs__capture-btn"
@@ -354,22 +357,22 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
           disabled={!content.trim() || saving}
           title="Save and open in editor  ⌘⇧↵"
         >
-          Save &amp; Open
+          {t.quickSearch.saveAndOpen}
         </button>
         <button
           className="qs__capture-btn qs__capture-btn--ghost"
           onClick={onSwitchSearch}
           title="Switch to search  ⇧Tab"
         >
-          ← Search
+          {t.quickSearch.backToSearch}
         </button>
       </div>
 
       <div className="qs__footer">
-        <span className="qs__hint"><kbd>⌘↵</kbd> save draft</span>
-        <span className="qs__hint"><kbd>⌘⇧↵</kbd> save &amp; open</span>
-        <span className="qs__hint"><kbd>⇧Tab</kbd> search</span>
-        <span className="qs__hint"><kbd>⎋</kbd> close</span>
+        <span className="qs__hint"><kbd>⌘↵</kbd> {t.quickSearch.footerSaveDraft}</span>
+        <span className="qs__hint"><kbd>⌘⇧↵</kbd> {t.quickSearch.footerSaveOpen}</span>
+        <span className="qs__hint"><kbd>⇧Tab</kbd> {t.quickSearch.footerSearch}</span>
+        <span className="qs__hint"><kbd>⎋</kbd> {t.quickSearch.footerClose}</span>
       </div>
     </div>
   );
@@ -378,6 +381,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
 // ── Root component ────────────────────────────────────────────────────────────
 
 export function QuickSearch() {
+  const t = useT();
   const [mode, setMode] = useState<"search" | "capture">("search");
 
   // The Alt+Shift+Space shortcut emits "switch-to-capture" from Rust.
@@ -409,7 +413,7 @@ export function QuickSearch() {
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ marginRight: 5 }}>
             <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zM6.5 12a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
           </svg>
-          Search
+          {t.quickSearch.tabSearch}
         </button>
         <button
           className={`qs__tab ${mode === "capture" ? "qs__tab--active" : ""}`}
@@ -418,7 +422,7 @@ export function QuickSearch() {
           <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ marginRight: 5 }}>
             <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm1 6V4H7v3H4v2h3v3h2V9h3V7H9z" />
           </svg>
-          Capture
+          {t.quickSearch.tabCapture}
         </button>
         <div className="qs__tabs-spacer" />
         <kbd className="qs__tab-hint">Alt+Space</kbd>

@@ -1,4 +1,6 @@
 import { useEffect } from "react";
+import { useT } from "../store/useI18nStore";
+import type { Translations } from "../i18n/translations";
 
 // ── Shortcut data ─────────────────────────────────────────────────────────────
 
@@ -12,65 +14,70 @@ interface ShortcutGroup {
   items: ShortcutItem[];
 }
 
-const GROUPS: ShortcutGroup[] = [
-  {
-    title: "Navigation",
-    items: [
-      { keys: ["⌘", "K"],       desc: "Focus search" },
-      { keys: ["⌘", "N"],       desc: "New gist" },
-      { keys: ["⌘", "P"],       desc: "Command palette" },
-      { keys: ["⌘", "R"],       desc: "Sync gists" },
-      { keys: ["↑ / ↓"],        desc: "Navigate gist list" },
-      { keys: ["Esc"],           desc: "Clear search / close panel" },
-    ],
-  },
-  {
-    title: "Editor",
-    items: [
-      { keys: ["⌘", "F"],       desc: "Find in file" },
-      { keys: ["⌘", "H"],       desc: "Find & Replace" },
-      { keys: ["⌘", "⇧", "H"], desc: "Toggle history panel" },
-      { keys: ["Alt", "["],      desc: "Switch to previous tab" },
-      { keys: ["Alt", "]"],      desc: "Switch to next tab" },
-      { keys: ["Double-click"],  desc: "Rename file tab" },
-      { keys: ["Middle-click"],  desc: "Close file tab" },
-    ],
-  },
-  {
-    title: "View",
-    items: [
-      { keys: ["⌘", "⇧", "F"], desc: "Full-text content search" },
-      { keys: ["⌘", "\\"],      desc: "Toggle Zen mode" },
-      { keys: ["⌘", "?"],       desc: "This keyboard shortcuts panel" },
-    ],
-  },
-  {
-    title: "Sidebar",
-    items: [
-      { keys: ["Right-click"],   desc: "Context menu on a gist" },
-      { keys: ["Right-click"],   desc: "Context menu on a file tab" },
-      { keys: ["Select button"], desc: "Enter bulk-select mode" },
-    ],
-  },
-  {
-    title: "Vim mode (when enabled)",
-    items: [
-      { keys: ["i"],             desc: "Insert mode" },
-      { keys: ["Esc"],           desc: "Normal mode" },
-      { keys: ["j / k"],         desc: "Move down / up" },
-      { keys: [":w"],            desc: "Write (auto-save triggers)" },
-    ],
-  },
-  {
-    title: "Markdown",
-    items: [
-      { keys: ["Source"],        desc: "View raw Markdown source" },
-      { keys: ["Preview"],       desc: "Rendered preview" },
-      { keys: ["Split"],         desc: "Side-by-side editing" },
-      { keys: ["Copy button"],   desc: "Copy code block" },
-    ],
-  },
-];
+// Key badges are language-agnostic; titles and descriptions resolve from `t`.
+function buildGroups(t: Translations): ShortcutGroup[] {
+  const g = t.shortcuts.groups;
+  const d = t.shortcuts.desc;
+  return [
+    {
+      title: g.navigation,
+      items: [
+        { keys: ["⌘", "K"],       desc: d.focusSearch },
+        { keys: ["⌘", "N"],       desc: d.newGist },
+        { keys: ["⌘", "P"],       desc: d.commandPalette },
+        { keys: ["⌘", "R"],       desc: d.syncGists },
+        { keys: ["↑ / ↓"],        desc: d.navigateList },
+        { keys: ["Esc"],           desc: d.clearSearch },
+      ],
+    },
+    {
+      title: g.editor,
+      items: [
+        { keys: ["⌘", "F"],       desc: d.findInFile },
+        { keys: ["⌘", "H"],       desc: d.findReplace },
+        { keys: ["⌘", "⇧", "H"], desc: d.toggleHistory },
+        { keys: ["Alt", "["],      desc: d.prevTab },
+        { keys: ["Alt", "]"],      desc: d.nextTab },
+        { keys: ["Double-click"],  desc: d.renameTab },
+        { keys: ["Middle-click"],  desc: d.closeTab },
+      ],
+    },
+    {
+      title: g.view,
+      items: [
+        { keys: ["⌘", "⇧", "F"], desc: d.fullTextSearch },
+        { keys: ["⌘", "\\"],      desc: d.toggleZen },
+        { keys: ["⌘", "?"],       desc: d.thisPanel },
+      ],
+    },
+    {
+      title: g.sidebar,
+      items: [
+        { keys: ["Right-click"],   desc: d.ctxGist },
+        { keys: ["Right-click"],   desc: d.ctxTab },
+        { keys: ["Select button"], desc: d.bulkSelect },
+      ],
+    },
+    {
+      title: g.vim,
+      items: [
+        { keys: ["i"],             desc: d.insertMode },
+        { keys: ["Esc"],           desc: d.normalMode },
+        { keys: ["j / k"],         desc: d.moveDownUp },
+        { keys: [":w"],            desc: d.write },
+      ],
+    },
+    {
+      title: g.markdown,
+      items: [
+        { keys: ["Source"],        desc: d.viewSource },
+        { keys: ["Preview"],       desc: d.renderedPreview },
+        { keys: ["Split"],         desc: d.splitEdit },
+        { keys: ["Copy button"],   desc: d.copyCode },
+      ],
+    },
+  ];
+}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -111,6 +118,8 @@ function Group({ group }: { group: ShortcutGroup }) {
 // ── Modal ─────────────────────────────────────────────────────────────────────
 
 export function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
+  const groups = buildGroups(t);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") { e.stopPropagation(); onClose(); }
@@ -129,19 +138,19 @@ export function ShortcutsModal({ onClose }: { onClose: () => void }) {
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="shortcuts-modal__head">
-          <h2>Keyboard Shortcuts</h2>
-          <button className="shortcuts-modal__close" onClick={onClose} title="Close">✕</button>
+          <h2>{t.shortcuts.title}</h2>
+          <button className="shortcuts-modal__close" onClick={onClose} title={t.shortcuts.close}>✕</button>
         </div>
 
         <div className="shortcuts-modal__body">
           <div className="shortcuts-grid">
-            {GROUPS.map((g) => (
+            {groups.map((g) => (
               <Group key={g.title} group={g} />
             ))}
           </div>
 
           <p className="shortcuts-modal__hint">
-            Tip: press <KeyBadge k="⌘" /><span className="shortcuts-plus">+</span><KeyBadge k="?" /> anytime to open this panel.
+            {t.shortcuts.hintPre}<KeyBadge k="⌘" /><span className="shortcuts-plus">+</span><KeyBadge k="?" />{t.shortcuts.hintPost}
           </p>
         </div>
       </div>

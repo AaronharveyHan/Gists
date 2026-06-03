@@ -132,16 +132,7 @@ pub fn get_backlinks(gist_id: &str) -> Result<Vec<Gist>> {
 pub fn resolve_wiki_link(link_text: &str) -> Result<Option<Gist>> {
     let lc = link_text.trim().to_lowercase();
     with_db(|conn| {
-        let id: Option<String> = conn
-            .query_row(
-                "SELECT id FROM gists WHERE LOWER(TRIM(description)) = ?1
-                 UNION ALL
-                 SELECT gist_id FROM files WHERE LOWER(filename) = ?1
-                 LIMIT 1",
-                params![lc],
-                |r| r.get(0),
-            )
-            .ok();
+        let id = resolve_wiki_id(conn, &lc)?;
         let Some(id) = id else { return Ok(None) };
         let mut stmt =
             conn.prepare(&format!("SELECT {GIST_ROW} FROM gists WHERE id = ?1"))?;
@@ -149,6 +140,100 @@ pub fn resolve_wiki_link(link_text: &str) -> Result<Option<Gist>> {
         g.files = load_files(conn, &g.id)?;
         Ok(Some(g))
     })
+}
+
+/// Resolve a lowercased wiki-link string to a gist ID using a cascade of
+/// increasingly-fuzzy strategies so that [[My gist]], [[my gist]], and
+/// [[my]] all find "My Gist" when no exact match exists.
+fn resolve_wiki_id(conn: &Connection, lc: &str) -> Result<Option<String>> {
+    if lc.is_empty() {
+        return Ok(None);
+    }
+
+    // 1. Exact case-insensitive match on description or filename.
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM gists WHERE LOWER(TRIM(description)) = ?1
+             UNION ALL
+             SELECT gist_id FROM files WHERE LOWER(filename) = ?1
+             LIMIT 1",
+            params![lc],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    {
+        return Ok(Some(id));
+    }
+
+    // 2. Description starts-with (avoids LIKE wildcard escaping issues).
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM gists \
+             WHERE SUBSTR(LOWER(TRIM(description)), 1, LENGTH(?1)) = ?1 LIMIT 1",
+            params![lc],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    {
+        return Ok(Some(id));
+    }
+
+    // 3. Description contains the full link text.
+    if let Some(id) = conn
+        .query_row(
+            "SELECT id FROM gists WHERE INSTR(LOWER(description), ?1) > 0 LIMIT 1",
+            params![lc],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    {
+        return Ok(Some(id));
+    }
+
+    // 4. Filename contains the full link text.
+    if let Some(id) = conn
+        .query_row(
+            "SELECT gist_id FROM files WHERE INSTR(LOWER(filename), ?1) > 0 LIMIT 1",
+            params![lc],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+    {
+        return Ok(Some(id));
+    }
+
+    // 5. Word-overlap fuzzy match: every query token appears somewhere in the
+    //    description.  Returns the gist with the most token matches (ties broken
+    //    by fewest extra words in the description — i.e. the shortest description
+    //    that satisfies the query).
+    let query_words: Vec<&str> = lc.split_whitespace().collect();
+    if query_words.is_empty() {
+        return Ok(None);
+    }
+
+    let mut stmt =
+        conn.prepare("SELECT id, LOWER(COALESCE(description,'')) FROM gists")?;
+    let candidates: Vec<(String, String)> = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    let best = candidates
+        .iter()
+        .filter_map(|(id, desc)| {
+            let hits = query_words.iter().filter(|w| desc.contains(*w)).count();
+            // Require at least half the query tokens to match.
+            if hits * 2 >= query_words.len() {
+                Some((hits, desc.split_whitespace().count(), id))
+            } else {
+                None
+            }
+        })
+        // Most hits first; among equal hits prefer the shortest description.
+        .max_by_key(|&(hits, desc_words, _)| (hits, usize::MAX - desc_words))
+        .map(|(_, _, id)| id.clone());
+
+    Ok(best)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

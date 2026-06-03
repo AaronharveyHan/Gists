@@ -17,7 +17,12 @@ use gists_client::github::FetchGistOutcome;
 
 // Keychain helpers live in `gists_client::auth` so the desktop app and the `gist`
 // CLI share one keychain entry. Re-export `keyring_get` for `main.rs`.
-use gists_client::auth::{keyring_delete, keyring_set, keyring_delete_for, keyring_set_for, keyring_get_for};
+use gists_client::auth::{
+    decrypt_from_db, encrypt_for_db,
+    keyring_delete, keyring_delete_for,
+    keyring_get_for,
+    keyring_set_checked, keyring_set_for_checked,
+};
 pub use gists_client::auth::keyring_get;
 
 // ── App state ─────────────────────────────────────────────────────────────────
@@ -52,9 +57,16 @@ pub async fn set_token(
     let login = github::validate_token(&token)
         .await
         .map_err(|e| e.to_string())?;
-    // Store in OS keychain (preferred); also persist to DB as fallback.
-    keyring_set(&token);
-    db::set_setting("token", &token).map_err(|e| e.to_string())?;
+
+    // Prefer OS keychain. If unavailable (headless Linux, no GNOME/KDE session),
+    // write an AES-256-GCM encrypted copy to SQLite instead of plaintext.
+    if keyring_set_checked(&token) {
+        // Keychain accepted — clear any stale DB copy so there is no plaintext.
+        let _ = db::set_setting("token", "");
+    } else {
+        let enc = encrypt_for_db(&token).map_err(|e| e.to_string())?;
+        db::set_setting("token", &enc).map_err(|e| e.to_string())?;
+    }
     db::set_setting("gh_login", &login).map_err(|e| e.to_string())?;
     *state.token.lock().await = Some(token);
     Ok(login)
@@ -387,9 +399,14 @@ pub async fn add_account(
         .map_err(|e| e.to_string())?;
     let token_key = format!("gists_client_acct_{}", id);
 
-    // Store in keychain; DB entry as fallback.
-    keyring_set_for(&token_key, &token);
-    let _ = db::set_setting(&format!("token_acct_{}", id), &token);
+    // Prefer OS keychain; fall back to AES-256-GCM encrypted DB entry.
+    if !keyring_set_for_checked(&token_key, &token) {
+        if let Ok(enc) = encrypt_for_db(&token) {
+            let _ = db::set_setting(&format!("token_acct_{}", id), &enc);
+        }
+    } else {
+        let _ = db::set_setting(&format!("token_acct_{}", id), "");
+    }
 
     // If this is the first account, make it active and load into AppState.
     let accounts = db::list_accounts().map_err(|e| e.to_string())?;
@@ -436,14 +453,23 @@ pub async fn switch_account(
                 .ok()
                 .flatten()
                 .filter(|t| !t.is_empty())
+                .and_then(|raw| decrypt_from_db(&raw))
         })
         .ok_or("No token found for this account — please re-add it")?;
 
     *state.token.lock().await = Some(token.clone());
     db::set_active_account(id).map_err(|e| e.to_string())?;
 
-    // Keep legacy settings in sync so the rest of the app picks up the change.
-    let _ = db::set_setting("token", &token);
+    // Keep the primary keychain entry + legacy `token` setting in sync so the
+    // rest of the app (and the next startup) picks up the active account.
+    // Mirror set_token's policy: keychain success → clear the DB copy so no
+    // token (even encrypted) lingers in SQLite; keychain failure → store an
+    // AES-256-GCM encrypted fallback.
+    if keyring_set_checked(&token) {
+        let _ = db::set_setting("token", "");
+    } else if let Ok(enc) = encrypt_for_db(&token) {
+        let _ = db::set_setting("token", &enc);
+    }
     if let Some(login) = &acc.login {
         let _ = db::set_setting("gh_login", login);
     }
@@ -923,10 +949,7 @@ pub struct EmbeddingProgress {
 /// Current embedding index status (indexed / total, not running).
 #[tauri::command]
 pub fn get_embedding_status() -> Result<EmbeddingProgress, String> {
-    let model = db::get_setting("ai_embedding_model")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+    let model = resolve_embed_provider().model_id();
     let (indexed, total) = cache::embedding_counts(&model).map_err(|e| e.to_string())?;
     Ok(EmbeddingProgress { indexed, total, running: false, error: None })
 }
@@ -958,34 +981,106 @@ fn effective_embedding_base_url() -> String {
     }
 }
 
+// ── Embedding provider abstraction ───────────────────────────────────────────
+//
+// Two backends produce embeddings: the remote OpenAI-compatible API (default)
+// and the optional, offline local ONNX model. Both the query path and the
+// indexer path go through this abstraction so the *same* model-id partition
+// key is used consistently for storage and retrieval.
+
+enum EmbedProvider {
+    Remote { base_url: String, api_key: String, model: String },
+    Local { dir: String },
+}
+
+impl EmbedProvider {
+    /// The string stored in `gist_embeddings.model`. Partitions the vector
+    /// space so cosine similarity never compares across incompatible models.
+    fn model_id(&self) -> String {
+        match self {
+            EmbedProvider::Remote { model, .. } => model.clone(),
+            EmbedProvider::Local { .. } => {
+                gists_client::local_embedding::LOCAL_MODEL_ID.to_string()
+            }
+        }
+    }
+}
+
+/// Default on-disk location for the local model when the user hasn't set one:
+/// `<app-data>/models`.
+fn default_local_embedding_dir() -> String {
+    gists_client::auth::app_data_dir()
+        .map(|d| d.join("models").to_string_lossy().into_owned())
+        .unwrap_or_else(|| "models".to_string())
+}
+
+/// Resolve the configured directory for local model storage.
+fn local_embedding_dir() -> String {
+    db::get_setting("local_embedding_dir")
+        .ok()
+        .flatten()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(default_local_embedding_dir)
+}
+
+/// Read the active embedding provider from settings. Defaults to remote so the
+/// behaviour is unchanged for users who never opt into local embeddings.
+fn resolve_embed_provider() -> EmbedProvider {
+    let provider = db::get_setting("embedding_provider")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    if provider == "local" {
+        EmbedProvider::Local { dir: local_embedding_dir() }
+    } else {
+        let model = db::get_setting("ai_embedding_model")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+        EmbedProvider::Remote {
+            base_url: effective_embedding_base_url(),
+            api_key: db::get_setting("ai_api_key").ok().flatten().unwrap_or_default(),
+            model,
+        }
+    }
+}
+
+/// Generate an embedding for `text` using the active provider. The local
+/// backend runs ONNX inference on a blocking thread so the async runtime is
+/// never stalled; the remote backend awaits an HTTP request.
+async fn embed_with(provider: &EmbedProvider, text: &str) -> Result<Vec<f32>, String> {
+    match provider {
+        EmbedProvider::Remote { base_url, api_key, model } => {
+            if api_key.is_empty() {
+                return Err("AI API key not configured. Open Settings → AI tab.".into());
+            }
+            gists_client::embedding::generate_embedding(text, base_url, api_key, model)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        EmbedProvider::Local { dir } => {
+            let dir = dir.clone();
+            let text = text.to_string();
+            tokio::task::spawn_blocking(move || {
+                gists_client::local_embedding::embed_local(&text, &dir)
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())
+        }
+    }
+}
+
 /// Generate a query embedding then return top-N results by cosine similarity.
 #[tauri::command]
 pub async fn semantic_search(
     query: String,
     limit: usize,
 ) -> Result<Vec<cache::SemanticResult>, String> {
-    let base_url = effective_embedding_base_url();
-    let api_key = db::get_setting("ai_api_key")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let model = db::get_setting("ai_embedding_model")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
-
-    if api_key.is_empty() {
-        return Err(
-            "AI API key not configured. Open Settings → AI tab.".into(),
-        );
-    }
-
-    let embedding =
-        gists_client::embedding::generate_embedding(&query, &base_url, &api_key, &model)
-            .await
-            .map_err(|e| e.to_string())?;
-
-    cache::semantic_search_by_embedding(&embedding, &model, limit)
+    let provider = resolve_embed_provider();
+    let model_id = provider.model_id();
+    let embedding = embed_with(&provider, &query).await?;
+    cache::semantic_search_by_embedding(&embedding, &model_id, limit)
         .map_err(|e| e.to_string())
 }
 
@@ -1018,11 +1113,45 @@ pub async fn ai_complete(messages: Vec<AiMessage>) -> Result<String, String> {
 /// Find near-duplicate gists using the stored embeddings (cosine ≥ threshold).
 #[tauri::command]
 pub fn find_duplicate_gists(threshold: f32) -> Result<Vec<cache::SimilarPair>, String> {
-    let model = db::get_setting("ai_embedding_model")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
+    let model = resolve_embed_provider().model_id();
     cache::find_similar_pairs(&model, threshold, 100).map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+pub struct LocalEmbeddingStatus {
+    /// Resolved directory where the model is/will be stored.
+    pub dir: String,
+    /// Whether the model files already exist on disk.
+    pub downloaded: bool,
+    /// Whether the model is loaded into memory this session.
+    pub loaded: bool,
+}
+
+/// Report whether the local embedding model is downloaded/loaded, plus the
+/// directory it lives in. Used by Settings to decide whether to offer a
+/// "download model" action before local semantic search can be used.
+#[tauri::command]
+pub fn local_embedding_status() -> Result<LocalEmbeddingStatus, String> {
+    let dir = local_embedding_dir();
+    Ok(LocalEmbeddingStatus {
+        downloaded: gists_client::local_embedding::is_downloaded(&dir),
+        loaded: gists_client::local_embedding::is_loaded(),
+        dir,
+    })
+}
+
+/// Download (if needed) and initialise the local embedding model. Runs the
+/// blocking download/load on a worker thread. Returns once the model is ready
+/// or with an error string if the download/initialisation failed.
+#[tauri::command]
+pub async fn download_local_embedding_model() -> Result<(), String> {
+    let dir = local_embedding_dir();
+    tokio::task::spawn_blocking(move || {
+        gists_client::local_embedding::ensure_ready(&dir)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
 }
 
 /// Spawn a background task that generates and stores embeddings for all
@@ -1030,32 +1159,22 @@ pub fn find_duplicate_gists(threshold: f32) -> Result<Vec<cache::SimilarPair>, S
 /// No-op if AI key is not configured.
 #[tauri::command]
 pub async fn start_embedding_indexer(window: tauri::Window) -> Result<(), String> {
-    let base_url = effective_embedding_base_url();
-    let api_key = db::get_setting("ai_api_key")
-        .ok()
-        .flatten()
-        .unwrap_or_default();
-    let model = db::get_setting("ai_embedding_model")
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| AI_DEFAULT_EMBEDDING_MODEL.to_string());
-
-    if api_key.is_empty() {
-        return Ok(());
+    let provider = resolve_embed_provider();
+    // The remote backend needs an API key; the local backend does not.
+    if let EmbedProvider::Remote { api_key, .. } = &provider {
+        if api_key.is_empty() {
+            return Ok(());
+        }
     }
 
     tauri::async_runtime::spawn(async move {
-        run_indexer(window, base_url, api_key, model).await;
+        run_indexer(window, provider).await;
     });
     Ok(())
 }
 
-async fn run_indexer(
-    window: tauri::Window,
-    base_url: String,
-    api_key: String,
-    model: String,
-) {
+async fn run_indexer(window: tauri::Window, provider: EmbedProvider) {
+    let model = provider.model_id();
     let stale = match cache::get_stale_gist_ids(&model) {
         Ok(v) => v,
         Err(_) => return,
@@ -1080,9 +1199,7 @@ async fn run_indexer(
         if text.trim().is_empty() {
             continue;
         }
-        match gists_client::embedding::generate_embedding(&text, &base_url, &api_key, &model)
-            .await
-        {
+        match embed_with(&provider, &text).await {
             Ok(emb) => {
                 let _ = cache::store_embedding(&gist_id, &version_key, &model, &emb);
                 done += 1;
@@ -1240,6 +1357,7 @@ pub async fn run_code(
                 gists_client::runner::RunDone {
                     exit_code: -1, timed_out: false, killed: false,
                     stdout: String::new(), stderr: e.to_string(), duration_ms: 0,
+                    truncated: false,
                 }
             }
         };
@@ -1249,7 +1367,7 @@ pub async fn run_code(
             let _ = gists_client::db::insert_run(
                 &gist_id, &filename,
                 done.exit_code, &done.stdout, &done.stderr,
-                done.duration_ms, done.timed_out, done.killed,
+                done.duration_ms, done.timed_out, done.killed, done.truncated,
             );
             let _ = gists_client::db::delete_old_runs(&gist_id, &filename, 50);
         }

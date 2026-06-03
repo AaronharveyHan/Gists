@@ -1163,7 +1163,7 @@ export function Editor() {
               key: "backlinks",
               priority: 4,
               node: (
-                <button type="button" className={`btn btn--icon${showBacklinks ? " btn--icon--active" : ""}`} onClick={toggleBacklinks} title={t.backlinks.panelHint + " (⌘⇧B)"}>
+                <button type="button" data-testid="backlinks-btn" className={`btn btn--icon${showBacklinks ? " btn--icon--active" : ""}`} onClick={toggleBacklinks} title={t.backlinks.panelHint + " (⌘⇧B)"}>
                   ↩
                 </button>
               ),
@@ -1431,6 +1431,7 @@ export function Editor() {
               type="button"
               role="tab"
               aria-selected={mdViewMode === mode}
+              data-testid={`md-tab-${mode}`}
               className={`editor__md-tab ${mdViewMode === mode ? "editor__md-tab--active" : ""}`}
               onClick={() => setMdViewMode(mode)}
             >

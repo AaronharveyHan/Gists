@@ -10,6 +10,13 @@ use tokio::process::Command;
 use std::process::Stdio;
 
 // Maps run_id → PID so kill_run can send a signal.
+//
+// All locks on this and the per-run output buffers use
+// `.unwrap_or_else(|e| e.into_inner())` rather than `.unwrap()`: if a thread
+// panics while holding the lock the mutex becomes poisoned, and a plain
+// `.unwrap()` would turn that into a cascade of panics that permanently breaks
+// the run feature. The data here (a PID map, line buffers) stays usable after
+// such a panic, so recovering the inner value is the safe, non-fatal choice.
 static RUNNING_PIDS: Lazy<Mutex<HashMap<String, u32>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -30,6 +37,8 @@ pub struct RunDone {
     pub stderr: String,
     /// Wall-clock duration in milliseconds.
     pub duration_ms: i64,
+    /// True if either stdout or stderr was clipped at the 100 KB cap.
+    pub truncated: bool,
 }
 
 struct Runner {
@@ -104,13 +113,14 @@ pub async fn run_code(
             return Ok(RunDone {
                 exit_code: -1, timed_out: false, killed: false,
                 stdout: String::new(), stderr: msg, duration_ms: 0,
+                truncated: false,
             });
         }
     };
 
     let pid = child.id().unwrap_or(0);
     if pid != 0 {
-        RUNNING_PIDS.lock().unwrap().insert(run_id.clone(), pid);
+        RUNNING_PIDS.lock().unwrap_or_else(|e| e.into_inner()).insert(run_id.clone(), pid);
     }
 
     let start = std::time::Instant::now();
@@ -133,7 +143,7 @@ pub async fn run_code(
                 &format!("run-line-{}", id1),
                 RunLine { text: line.clone(), stream: "stdout".into() },
             );
-            buf1.lock().unwrap().push(line);
+            buf1.lock().unwrap_or_else(|e| e.into_inner()).push(line);
         }
     });
 
@@ -147,7 +157,7 @@ pub async fn run_code(
                 &format!("run-line-{}", id2),
                 RunLine { text: line.clone(), stream: "stderr".into() },
             );
-            buf2.lock().unwrap().push(line);
+            buf2.lock().unwrap_or_else(|e| e.into_inner()).push(line);
         }
     });
 
@@ -175,29 +185,39 @@ pub async fn run_code(
     let duration_ms = start.elapsed().as_millis() as i64;
 
     const MAX_BYTES: usize = 102_400;
-    let mut stdout_str = stdout_buf.lock().unwrap().join("\n");
-    let mut stderr_str = stderr_buf.lock().unwrap().join("\n");
-    if stdout_str.len() > MAX_BYTES {
-        stdout_str.truncate(MAX_BYTES);
-        stdout_str.push_str("\n…[truncated]");
-    }
-    if stderr_str.len() > MAX_BYTES {
-        stderr_str.truncate(MAX_BYTES);
-        stderr_str.push_str("\n…[truncated]");
-    }
+    let mut stdout_str = stdout_buf.lock().unwrap_or_else(|e| e.into_inner()).join("\n");
+    let mut stderr_str = stderr_buf.lock().unwrap_or_else(|e| e.into_inner()).join("\n");
+    let stdout_clipped = clip_to(&mut stdout_str, MAX_BYTES);
+    let stderr_clipped = clip_to(&mut stderr_str, MAX_BYTES);
+    let truncated = stdout_clipped || stderr_clipped;
 
-    RUNNING_PIDS.lock().unwrap().remove(&run_id);
+    RUNNING_PIDS.lock().unwrap_or_else(|e| e.into_inner()).remove(&run_id);
 
     // Best-effort cleanup of the temp directory.
     let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
 
-    Ok(RunDone { exit_code, timed_out, killed, stdout: stdout_str, stderr: stderr_str, duration_ms })
+    Ok(RunDone { exit_code, timed_out, killed, stdout: stdout_str, stderr: stderr_str, duration_ms, truncated })
+}
+
+/// Clip `s` to at most `max_bytes`, snapping to a UTF-8 char boundary so we
+/// never panic mid-codepoint, then append a marker. Returns true if clipped.
+fn clip_to(s: &mut String, max_bytes: usize) -> bool {
+    if s.len() <= max_bytes {
+        return false;
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
+    s.push_str("\n…[truncated]");
+    true
 }
 
 /// Signal a running process to stop. The run_code future will detect the exit
 /// and emit run-done naturally.
 pub fn kill_run(run_id: &str) {
-    if let Some(pid) = RUNNING_PIDS.lock().unwrap().get(run_id).copied() {
+    if let Some(pid) = RUNNING_PIDS.lock().unwrap_or_else(|e| e.into_inner()).get(run_id).copied() {
         if pid != 0 { kill_pid(pid); }
     }
 }

@@ -3047,6 +3047,57 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
   font-size: 11px;
   color: #f59e0b;
 }
+.settings-warn--info {
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* Embedding-backend segmented toggle */
+.settings-segmented {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--border, #30363d);
+  border-radius: 6px;
+  overflow: hidden;
+  width: fit-content;
+}
+.settings-segmented__btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.settings-segmented__btn:not(:last-child) {
+  border-right: 1px solid var(--border, #30363d);
+}
+.settings-segmented__btn.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Local model status row */
+.settings-local-model {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+.settings-local-model__badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 10px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-2) 14%, transparent);
+}
+.settings-local-model__badge.is-ready {
+  color: #3fb950;
+  background: color-mix(in srgb, #3fb950 16%, transparent);
+}
 
 .settings-badge {
   font-size: 10px;
@@ -3536,6 +3587,19 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
   font-size: 12px;
 }
 
+.run-panel__truncated {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid #f59e0b;
+  border-left-width: 3px;
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  color: #f59e0b;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 .run-panel__cursor {
   display: inline-block;
   width: 7px;
@@ -3785,12 +3849,21 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
   color: var(--text-2);
   white-space: nowrap;
 }
+.graph-view__stats-hidden {
+  color: var(--text-3, #6e7681);
+  font-style: italic;
+}
 
 .graph-view__controls {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+}
+.graph-view__toggle--active {
+  background: var(--aurora, #7c6aff);
+  border-color: var(--aurora, #7c6aff);
+  color: #fff;
 }
 
 .graph-view__body {

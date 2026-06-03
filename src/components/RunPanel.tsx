@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { runCode, killRun, listRunHistory, diffRuns } from "../api/tauri";
 import type { RunLine, RunDone, RunRecord } from "../api/tauri";
 import { notify } from "../store/useNotificationStore";
+import { useT } from "../store/useI18nStore";
 
 interface OutputLine {
   id: number;
@@ -24,6 +25,12 @@ const IDLE: RunState = {
   status: "idle", exitCode: null, timedOut: false, killed: false, durationMs: null,
 };
 
+// Cap the live output buffer so a runaway/verbose program can't grow the array
+// unbounded (memory bloat + unresponsive UI). We keep the most recent lines;
+// the full output is still archived to the DB (capped at 100 KB) and viewable
+// via run history.
+const MAX_LIVE_LINES = 5000;
+
 function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(2)}s`;
 }
@@ -44,8 +51,9 @@ function formatRelTime(isoStr: string): string {
 }
 
 function DiffView({ text }: { text: string }) {
+  const t = useT();
   if (!text.trim()) {
-    return <div className="run-diff__empty">No output differences between runs.</div>;
+    return <div className="run-diff__empty">{t.runner.noOutputDiff}</div>;
   }
   return (
     <div className="run-diff__body">
@@ -95,6 +103,7 @@ export function RunPanel({
   const activeRunId = useRef<string | null>(null);
   const lineCount = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const t = useT();
 
   // Auto-scroll when new lines arrive
   useEffect(() => {
@@ -126,10 +135,11 @@ export function RunPanel({
     const start = async () => {
       unlistenLine = await listen<RunLine>(`run-line-${id}`, (e) => {
         const n = ++lineCount.current;
-        setOutput((prev) => [
-          ...prev,
-          { id: n, text: e.payload.text, stream: e.payload.stream },
-        ]);
+        setOutput((prev) => {
+          const next = [...prev, { id: n, text: e.payload.text, stream: e.payload.stream }];
+          // Keep only the most recent MAX_LIVE_LINES; drop the oldest.
+          return next.length > MAX_LIVE_LINES ? next.slice(-MAX_LIVE_LINES) : next;
+        });
       });
       // Cleanup ran while we were awaiting listen — bail out immediately.
       if (cancelled) { cleanup(); return; }
@@ -146,12 +156,16 @@ export function RunPanel({
         if (activeRunId.current === id) activeRunId.current = null;
         cleanup();
 
-        // Fetch updated history after run is saved to DB.
+        // Fetch updated history after run is saved to DB. On failure the list
+        // would silently keep showing the previous run's history, so surface it.
         if (gistId && filename) {
           try {
             const hist = await listRunHistory(gistId, filename);
             setHistory(hist);
-          } catch {}
+          } catch (err) {
+            console.error("[run] refresh history failed:", err);
+            notify(t.runner.historyLoadError, "error");
+          }
         }
       });
       if (cancelled) { cleanup(); return; }
@@ -160,7 +174,7 @@ export function RunPanel({
         await runCode(id, gistId, filename, content);
       } catch (e) {
         const msg = String(e);
-        notify("Run failed: " + msg);
+        notify(t.runner.runFailed(msg));
         const n = ++lineCount.current;
         setOutput((prev) => [...prev, { id: n, text: msg, stream: "stderr" }]);
         setState({ status: "done", exitCode: -1, timedOut: false, killed: false, durationMs: null });
@@ -197,19 +211,19 @@ export function RunPanel({
       setDiffText(diff);
       setShowDiff(true);
     } catch {
-      notify("Failed to compute diff");
+      notify(t.runner.diffFailed);
     } finally {
       setDiffLoading(false);
     }
   };
 
   const statusBadge = () => {
-    if (state.status === "running") return { label: "Running", cls: "running" };
-    if (state.status === "idle") return { label: "Ready", cls: "idle" };
-    if (state.killed) return { label: "Killed", cls: "err" };
-    if (state.timedOut) return { label: "Timed out", cls: "err" };
-    if (state.exitCode === 0) return { label: "Exit 0", cls: "ok" };
-    return { label: `Exit ${state.exitCode}`, cls: "err" };
+    if (state.status === "running") return { label: t.runner.running, cls: "running" };
+    if (state.status === "idle") return { label: t.runner.ready, cls: "idle" };
+    if (state.killed) return { label: t.runner.killed, cls: "err" };
+    if (state.timedOut) return { label: t.runner.timedOut, cls: "err" };
+    if (state.exitCode === 0) return { label: t.runner.exitBadge(0), cls: "ok" };
+    return { label: t.runner.exitBadge(state.exitCode), cls: "err" };
   };
 
   const badge = statusBadge();
@@ -232,7 +246,7 @@ export function RunPanel({
 
         {state.status === "done" && state.durationMs !== null && (
           <span className="run-panel__timing">
-            {`Finished in ${formatDuration(state.durationMs)} · exit ${state.exitCode}`}
+            {t.runner.finishedLine(formatDuration(state.durationMs), state.exitCode)}
           </span>
         )}
 
@@ -241,13 +255,13 @@ export function RunPanel({
             <button
               className="btn btn--danger run-panel__kill"
               onClick={handleKill}
-              title="Kill process"
+              title={t.runner.killProcess}
             >
-              ⬛ Stop
+              ⬛ {t.runner.stop}
             </button>
           ) : (
             <span className="run-panel__idle-hint">
-              Click ▶ Run to execute again
+              {t.runner.idleHint}
             </span>
           )}
 
@@ -256,24 +270,24 @@ export function RunPanel({
               className={`btn run-panel__vs-btn${showDiff ? " run-panel__vs-btn--active" : ""}`}
               onClick={handleToggleDiff}
               disabled={diffLoading}
-              title="Compare output with previous run"
+              title={t.runner.compareTooltip}
             >
-              {diffLoading ? "…" : showDiff ? "Hide diff" : "vs last run"}
+              {diffLoading ? "…" : showDiff ? t.runner.hideLastRun : t.runner.vsLastRun}
             </button>
           )}
 
           <button
             className="btn run-panel__clear"
             onClick={() => { setOutput([]); setHistoryOutput(null); }}
-            title="Clear output"
+            title={t.runner.clearOutput}
             disabled={state.status === "running"}
           >
-            Clear
+            {t.runner.clear}
           </button>
           <button
             className="btn run-panel__close"
             onClick={onClose}
-            title="Close run panel"
+            title={t.runner.closePanel}
           >
             ×
           </button>
@@ -285,21 +299,35 @@ export function RunPanel({
           <div className="run-panel__hist-view">
             <div className="run-panel__hist-view-bar">
               <span>
-                {formatRelTime(historyOutput.ran_at)} · exit {historyOutput.exit_code} · {formatDuration(historyOutput.duration_ms)}
+                {formatRelTime(historyOutput.ran_at)} · {t.runner.exitCode(historyOutput.exit_code)} · {formatDuration(historyOutput.duration_ms)}
               </span>
-              <button className="btn" onClick={() => setHistoryOutput(null)}>✕ Back to current</button>
+              <button className="btn" onClick={() => setHistoryOutput(null)}>✕ {t.runner.backToCurrent}</button>
             </div>
+            {historyOutput.truncated && (
+              <div className="run-panel__truncated" role="alert">
+                {t.runner.archiveTruncated}
+              </div>
+            )}
             {historyOutput.stdout
               ? historyOutput.stdout.split("\n").map((line, i) => (
                   <div key={i} className="run-panel__line run-panel__line--stdout">{line}</div>
                 ))
-              : <span className="run-panel__empty">No output.</span>
+              : <span className="run-panel__empty">{t.runner.noOutput}</span>
             }
           </div>
         ) : (
           <>
             {displayOutput!.length === 0 && state.status !== "running" && (
-              <span className="run-panel__empty">No output yet.</span>
+              <span className="run-panel__empty">{t.runner.noOutputYet}</span>
+            )}
+            {displayOutput!.length > 0 && displayOutput![0].id > 1 && (
+              <div className="run-panel__truncated" role="status">
+                {t.runner.collapsed(
+                  (displayOutput![0].id - 1).toLocaleString(),
+                  displayOutput![0].id - 1 !== 1,
+                  MAX_LIVE_LINES.toLocaleString(),
+                )}
+              </div>
             )}
             {displayOutput!.map((line) => (
               <div
@@ -319,7 +347,12 @@ export function RunPanel({
 
       {showDiff && (
         <div className="run-diff">
-          <div className="run-diff__header">Output diff: current vs previous run</div>
+          <div className="run-diff__header">{t.runner.diffHeader}</div>
+          {(history[0]?.truncated || history[1]?.truncated) && (
+            <div className="run-panel__truncated" role="alert">
+              {t.runner.diffTruncated}
+            </div>
+          )}
           <DiffView text={diffText} />
         </div>
       )}
@@ -330,7 +363,7 @@ export function RunPanel({
             className="run-history__toggle"
             onClick={() => setHistoryOpen((o) => !o)}
           >
-            {historyOpen ? "▴" : "▾"} Run history ({history.length})
+            {historyOpen ? "▴" : "▾"} {t.runner.runHistory(history.length)}
           </button>
           {historyOpen && (
             <div className="run-history__list">
@@ -339,7 +372,7 @@ export function RunPanel({
                   key={run.id}
                   className={`run-history__item${historyOutput?.id === run.id ? " run-history__item--active" : ""}`}
                   onClick={() => setHistoryOutput(run)}
-                  title="Click to view this run's output"
+                  title={t.runner.viewRunOutput}
                 >
                   <span className="run-history__time">{formatRelTime(run.ran_at)}</span>
                   <span
@@ -349,7 +382,7 @@ export function RunPanel({
                       : "err"
                     }`}
                   >
-                    {run.timed_out ? "timeout" : run.killed ? "killed" : `exit ${run.exit_code}`}
+                    {run.timed_out ? t.runner.timeoutShort : run.killed ? t.runner.killedShort : t.runner.exitCode(run.exit_code)}
                   </span>
                   <span className="run-history__dur">{formatDuration(run.duration_ms)}</span>
                 </div>

@@ -11,6 +11,7 @@ import remarkGfm from "remark-gfm";
 import { MermaidBlock } from "./MermaidBlock";
 import { resolveWikiLink } from "../api/tauri";
 import { useGistStore } from "../store/useGistStore";
+import { useT } from "../store/useI18nStore";
 
 function extractText(node: ReactNode): string {
   if (typeof node === "string") return node;
@@ -39,6 +40,7 @@ function isMermaidPre(children: ReactNode): string | null {
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  const t = useT();
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -49,9 +51,9 @@ function CopyButton({ text }: { text: string }) {
     <button
       className={`md-copy-btn ${copied ? "md-copy-btn--copied" : ""}`}
       onClick={handleCopy}
-      title="Copy to clipboard"
+      title={t.markdownPreview.copyToClipboard}
     >
-      {copied ? "Copied" : "Copy"}
+      {copied ? t.markdownPreview.copied : t.markdownPreview.copy}
     </button>
   );
 }
@@ -129,8 +131,8 @@ function preprocessWikiLinks(text: string): string {
 
   // Restore hidden blocks.
   const restored = linked
-    .replace(/\x00FENCE(\d+)\x00/g, (_, i) => fences[parseInt(i)])
-    .replace(/\x00INLINE(\d+)\x00/g, (_, i) => inlines[parseInt(i)]);
+    .replace(/\x00FENCE(\d+)\x00/g, (_, i) => fences[parseInt(i)]) // eslint-disable-line no-control-regex
+    .replace(/\x00INLINE(\d+)\x00/g, (_, i) => inlines[parseInt(i)]); // eslint-disable-line no-control-regex
 
   return restored;
 }

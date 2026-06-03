@@ -3,6 +3,7 @@ import { useTemplateStore } from "../store/useTemplateStore";
 import { notify } from "../store/useNotificationStore";
 import type { Template } from "../api/tauri";
 import { VscodeSnippetsImportModal } from "./VscodeSnippetsImportModal";
+import { useT } from "../store/useI18nStore";
 
 // ── Save-as-template modal ────────────────────────────────────────────────────
 
@@ -16,6 +17,7 @@ export function SaveAsTemplateModal({
   onClose: () => void;
 }) {
   const { saveGistAsTemplate } = useTemplateStore();
+  const t = useT();
   const [name, setName] = useState(defaultName);
   const [saving, setSaving] = useState(false);
 
@@ -32,10 +34,10 @@ export function SaveAsTemplateModal({
     setSaving(true);
     try {
       await saveGistAsTemplate(gistId, name.trim());
-      notify("Saved as template", "success");
+      notify(t.templates.savedAsTemplate, "success");
       onClose();
     } catch (e) {
-      notify("Failed to save template: " + String(e));
+      notify(t.templates.saveFailed(String(e)));
     } finally {
       setSaving(false);
     }
@@ -47,9 +49,9 @@ export function SaveAsTemplateModal({
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
       <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>Save as Template</h2>
+        <h2>{t.templates.saveAsTitle}</h2>
         <label>
-          Template name
+          {t.templates.nameLabel}
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -57,18 +59,18 @@ export function SaveAsTemplateModal({
               if (e.key === "Enter") handleSave();
               if (e.key === "Escape") onClose();
             }}
-            placeholder="e.g. React Component"
+            placeholder={t.templates.namePlaceholder}
             autoFocus
           />
         </label>
         <div className="modal__actions">
-          <button className="btn" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={onClose}>{t.common.cancel}</button>
           <button
             className="btn btn--primary"
             onClick={handleSave}
             disabled={saving || !name.trim()}
           >
-            {saving ? "Saving…" : "Save Template"}
+            {saving ? t.templates.saving : t.templates.saveTemplate}
           </button>
         </div>
       </div>
@@ -94,6 +96,7 @@ function TemplateEditForm({
   onSave: (state: EditState) => Promise<void>;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [isPublic, setIsPublic] = useState(initial?.is_public ?? false);
@@ -134,13 +137,13 @@ function TemplateEditForm({
   };
 
   const handleSave = async () => {
-    if (!name.trim()) { setError("Template name is required"); return; }
+    if (!name.trim()) { setError(t.templates.nameRequired); return; }
     if (files.some((f) => !f.filename.trim())) {
-      setError("All files must have a filename");
+      setError(t.templates.filenameRequired);
       return;
     }
     if (files.some((f) => !f.content.trim())) {
-      setError("All files must have content");
+      setError(t.templates.contentRequired);
       return;
     }
     setError(null);
@@ -160,22 +163,22 @@ function TemplateEditForm({
     <div className="template-form">
       <div className="template-form__meta">
         <label className="template-form__label">
-          Template name
+          {t.templates.nameLabel}
           <input
             className="template-form__input"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. React Component"
+            placeholder={t.templates.namePlaceholder}
             autoFocus
           />
         </label>
         <label className="template-form__label">
-          Default description
+          {t.templates.descLabel}
           <input
             className="template-form__input"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Optional"
+            placeholder={t.templates.descPlaceholder}
           />
         </label>
         <label className="template-form__checkbox">
@@ -184,7 +187,7 @@ function TemplateEditForm({
             checked={isPublic}
             onChange={(e) => setIsPublic(e.target.checked)}
           />
-          Public gist
+          {t.templates.publicGist}
         </label>
       </div>
 
@@ -205,7 +208,7 @@ function TemplateEditForm({
                 <button
                   className="template-form__file-tab-close"
                   onClick={() => removeFile(i)}
-                  title="Remove file"
+                  title={t.templates.removeFile}
                 >
                   ×
                 </button>
@@ -215,7 +218,7 @@ function TemplateEditForm({
           <button
             className="template-form__file-tab template-form__file-tab--add"
             onClick={addFile}
-            title="Add file"
+            title={t.templates.addFile}
           >
             +
           </button>
@@ -234,7 +237,7 @@ function TemplateEditForm({
               className="template-form__content"
               value={activeFile.content}
               onChange={(e) => updateFile(activeIdx, "content", e.target.value)}
-              placeholder="File content…"
+              placeholder={t.templates.contentPlaceholder}
               rows={12}
               spellCheck={false}
             />
@@ -245,13 +248,13 @@ function TemplateEditForm({
       {error && <p className="template-form__error">{error}</p>}
 
       <div className="template-form__actions">
-        <button className="btn" onClick={onCancel}>Cancel</button>
+        <button className="btn" onClick={onCancel}>{t.common.cancel}</button>
         <button
           className="btn btn--primary"
           onClick={handleSave}
           disabled={saving}
         >
-          {saving ? "Saving…" : initial ? "Update Template" : "Create Template"}
+          {saving ? t.templates.saving : initial ? t.templates.updateBtn : t.templates.createBtn}
         </button>
       </div>
     </div>
@@ -270,6 +273,7 @@ export function TemplatesModal({
   const {
     templates, loadTemplates, createTemplate, updateTemplate, deleteTemplate,
   } = useTemplateStore();
+  const t = useT();
   const [editingId, setEditingId] = useState<number | "new" | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [showVscodeImport, setShowVscodeImport] = useState(false);
@@ -295,7 +299,7 @@ export function TemplatesModal({
     const files: [string, string][] = state.files.map((f) => [f.filename, f.content]);
     if (editingId === "new") {
       await createTemplate(state.name, state.description, state.isPublic, files);
-      notify("Template created", "success");
+      notify(t.templates.templateCreated, "success");
     } else {
       await updateTemplate(
         editingId as number,
@@ -304,14 +308,14 @@ export function TemplatesModal({
         state.isPublic,
         files
       );
-      notify("Template updated", "success");
+      notify(t.templates.templateUpdated, "success");
     }
     setEditingId(null);
   };
 
   const handleDelete = async (id: number) => {
     await deleteTemplate(id);
-    notify("Template deleted", "success");
+    notify(t.templates.templateDeleted, "success");
     setConfirmDeleteId(null);
   };
 
@@ -325,10 +329,10 @@ export function TemplatesModal({
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="templates-modal__head">
-          <h2>Templates</h2>
+          <h2>{t.templates.title}</h2>
           {editingId !== null && (
             <span className="templates-modal__breadcrumb">
-              {editingId === "new" ? "New template" : "Edit template"}
+              {editingId === "new" ? t.templates.breadcrumbNew : t.templates.breadcrumbEdit}
             </span>
           )}
           <button className="templates-modal__close btn" onClick={onClose}>×</button>
@@ -347,81 +351,81 @@ export function TemplatesModal({
                 className="btn btn--primary"
                 onClick={() => setEditingId("new")}
               >
-                + New Template
+                {t.templates.newTemplateBtn}
               </button>
               <button
                 className="btn"
                 onClick={() => setShowVscodeImport(true)}
-                title="Import VS Code user snippets as templates"
+                title={t.templates.importVscodeTitle}
               >
-                ⇣ Import from VS Code
+                {t.templates.importVscode}
               </button>
               <span className="templates-modal__hint">
-                Templates scaffold new gists with pre-filled content
+                {t.templates.hint}
               </span>
             </div>
 
             {templates.length === 0 ? (
               <p className="templates-modal__empty">
-                No templates yet — create one to quickly scaffold new gists.
+                {t.templates.noTemplates}
               </p>
             ) : (
               <div className="templates-modal__list">
-                {templates.map((t) => (
-                  <div key={t.id} className="template-card">
+                {templates.map((tmpl) => (
+                  <div key={tmpl.id} className="template-card">
                     <div className="template-card__body">
-                      <div className="template-card__name">{t.name}</div>
-                      {t.description && (
-                        <div className="template-card__desc">{t.description}</div>
+                      <div className="template-card__name">{tmpl.name}</div>
+                      {tmpl.description && (
+                        <div className="template-card__desc">{tmpl.description}</div>
                       )}
                       <div className="template-card__meta">
-                        <span>{t.files.length} file{t.files.length !== 1 ? "s" : ""}</span>
-                        <span className={`template-card__vis ${t.is_public ? "template-card__vis--public" : ""}`}>
-                          {t.is_public ? "● Public" : "○ Secret"}
+                        <span>{t.templates.filesCount(tmpl.files.length)}</span>
+                        <span className={`template-card__vis ${tmpl.is_public ? "template-card__vis--public" : ""}`}>
+                          {tmpl.is_public ? t.templates.public : t.templates.secret}
                         </span>
                         <span className="template-card__filelist">
-                          {t.files.slice(0, 3).map((f) => f.filename).join(", ")}
-                          {t.files.length > 3 && ` +${t.files.length - 3} more`}
+                          {tmpl.files.slice(0, 3).map((f) => f.filename).join(", ")}
+                          {tmpl.files.length > 3 && ` ${t.templates.moreFiles(tmpl.files.length - 3)}`}
                         </span>
                       </div>
                     </div>
                     <div className="template-card__actions">
                       <button
                         className="btn btn--primary"
-                        onClick={() => { onUseTemplate(t); onClose(); }}
-                        title="Create a new gist from this template"
+                        onClick={() => { onUseTemplate(tmpl); onClose(); }}
+                        title={t.templates.useTitle}
                       >
-                        Use
+                        {t.templates.use}
                       </button>
                       <button
                         className="btn"
-                        onClick={() => setEditingId(t.id)}
-                        title="Edit template"
+                        onClick={() => setEditingId(tmpl.id)}
+                        title={t.templates.editTitle}
                       >
-                        Edit
+                        {t.templates.edit}
                       </button>
-                      {confirmDeleteId === t.id ? (
+                      {confirmDeleteId === tmpl.id ? (
                         <>
                           <button
                             className="btn btn--danger"
-                            onClick={() => handleDelete(t.id)}
+                            onClick={() => handleDelete(tmpl.id)}
                           >
-                            Confirm
+                            {t.templates.confirm}
                           </button>
                           <button
                             className="btn"
                             onClick={() => setConfirmDeleteId(null)}
                           >
-                            Cancel
+                            {t.common.cancel}
                           </button>
                         </>
                       ) : (
                         <button
                           className="btn btn--danger"
-                          onClick={() => setConfirmDeleteId(t.id)}
-                          title="Delete template"
+                          onClick={() => setConfirmDeleteId(tmpl.id)}
+                          title={t.templates.deleteTitle}
                         >
-                          Delete
+                          {t.templates.delete}
                         </button>
                       )}
                     </div>

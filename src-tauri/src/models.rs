@@ -199,6 +199,8 @@ pub struct RunRecord {
     pub duration_ms: i64,
     pub timed_out: bool,
     pub killed: bool,
+    /// True if stdout/stderr was clipped at the 100 KB archive cap.
+    pub truncated: bool,
 }
 
 /// One file in a three-way merge result.

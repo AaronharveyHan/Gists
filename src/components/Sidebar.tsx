@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { listen } from "@tauri-apps/api/event";
 import { useGistStore } from "../store/useGistStore";
 import { useThemeStore, type SortOrder } from "../store/useThemeStore";
@@ -277,7 +278,13 @@ function languageColor(lang: string | null): string {
   return lang ? (map[lang] ?? "#8b949e") : "#8b949e";
 }
 
-function GistItem({
+// Memoized so a parent re-render (typing in search, select-mode toggle, a
+// background-sync tick) only reconciles rows whose props actually changed,
+// not every row in the list. For this to hold, all props must be stable:
+// `gist` keeps its object identity until it changes, the callbacks are
+// useCallback'd by the parent, and the store actions below are selected
+// individually (action references are stable, so no whole-store subscription).
+const GistItem = memo(function GistItem({
   gist, selected, selectMode, checked, onCheck, onContextMenu,
 }: {
   gist: Gist; selected: boolean;
@@ -286,7 +293,8 @@ function GistItem({
   onContextMenu: (gist: Gist, x: number, y: number) => void;
 }) {
   const t = useT();
-  const { selectGist, togglePin } = useGistStore();
+  const selectGist = useGistStore((s) => s.selectGist);
+  const togglePin = useGistStore((s) => s.togglePin);
   const primaryFile = gist.files[0];
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -356,7 +364,7 @@ function GistItem({
       </div>
     </button>
   );
-}
+});
 
 function TagFilterPanel({
   allTags,
@@ -436,6 +444,152 @@ function sortGists(gists: Gist[], order: SortOrder): Gist[] {
   return sorted;
 }
 
+// ── Virtual gist list ─────────────────────────────────────────────────────────
+// Renders only the items visible in the scroll viewport plus a small overscan
+// buffer. At 3,000 gists this keeps DOM nodes under ~30 instead of 3,000.
+
+import type { Translations } from "../i18n/translations";
+
+interface GistListProps {
+  listRef: React.RefObject<HTMLDivElement>;
+  filteredGists: Gist[];
+  selectedId: string | null;
+  selectMode: boolean;
+  checkedIds: Set<string>;
+  toggleCheck: (id: string) => void;
+  openCtxMenu: (gist: Gist, x: number, y: number) => void;
+  // skeleton / empty-state deps
+  gists: Gist[];
+  syncStatus: string;
+  isLocallyFiltered: boolean;
+  searchQuery: string;
+  // semantic mode
+  searchMode: "keyword" | "semantic";
+  semanticError: string | null;
+  semanticBusy: boolean;
+  semanticGists: Gist[];
+  semanticScoreMap: Map<string, number>;
+  t: Translations;
+}
+
+function GistList({
+  listRef, filteredGists, selectedId, selectMode, checkedIds,
+  toggleCheck, openCtxMenu, gists, syncStatus, isLocallyFiltered,
+  searchQuery, searchMode, semanticError, semanticBusy, semanticGists,
+  semanticScoreMap, t,
+}: GistListProps) {
+  const virtualizer = useVirtualizer({
+    count: filteredGists.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => 72,
+    overscan: 6,
+  });
+
+  // Scroll the selected item into view via the virtualizer (works even when the
+  // item is outside the rendered window, unlike a DOM querySelector).
+  const selectedIndex = useMemo(
+    () => filteredGists.findIndex((g) => g.id === selectedId),
+    [filteredGists, selectedId]
+  );
+  useEffect(() => {
+    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+  }, [selectedIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const items = virtualizer.getVirtualItems();
+  const totalHeight = virtualizer.getTotalSize();
+
+  // ── Semantic search mode ──────────────────────────────────────────────────
+  if (searchMode === "semantic" && searchQuery.trim()) {
+    return (
+      <div className="sidebar__list" data-testid="gist-list" ref={listRef}>
+        {semanticError && (
+          <p className="sidebar__empty sidebar__empty--error">{semanticError}</p>
+        )}
+        {!semanticBusy && !semanticError && semanticGists.length === 0 && (
+          <p className="sidebar__empty">{t.sidebar.noSemanticMatches}</p>
+        )}
+        {semanticGists.map((g) => (
+          <div key={g.id} className="sidebar__semantic-item-wrap">
+            <GistItem
+              gist={g}
+              selected={g.id === selectedId}
+              selectMode={selectMode}
+              checked={checkedIds.has(g.id)}
+              onCheck={toggleCheck}
+              onContextMenu={openCtxMenu}
+            />
+            <div
+              className="sidebar__score-bar"
+              title={`Similarity: ${Math.round((semanticScoreMap.get(g.id) ?? 0) * 100)}%`}
+            >
+              <div
+                className="sidebar__score-bar__fill"
+                style={{ width: `${Math.round((semanticScoreMap.get(g.id) ?? 0) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ── Keyword / normal mode with virtualization ─────────────────────────────
+  return (
+    <div className="sidebar__list" data-testid="gist-list" ref={listRef}>
+      {gists.length === 0 && syncStatus === "syncing" && (
+        <>
+          {[70, 50, 85, 55, 65].map((w, i) => (
+            <div key={i} className="skeleton-item">
+              <div className="skeleton skeleton-item__title" style={{ width: `${w}%` }} />
+              <div className="skeleton skeleton-item__sub" style={{ width: `${w * 0.6}%` }} />
+              <div className="skeleton skeleton-item__meta" style={{ width: `${w * 0.45}%` }} />
+            </div>
+          ))}
+        </>
+      )}
+      {filteredGists.length === 0 && syncStatus !== "syncing" && (
+        <p className="sidebar__empty">
+          {isLocallyFiltered
+            ? t.sidebar.noGistsFilter
+            : searchQuery
+            ? t.sidebar.noResults
+            : t.sidebar.noGists}
+        </p>
+      )}
+      {filteredGists.length > 0 && (
+        <div style={{ height: totalHeight, position: "relative" }}>
+          {items.map((vItem) => {
+            const g = filteredGists[vItem.index];
+            return (
+              <div
+                key={g.id}
+                data-index={vItem.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${vItem.start}px)`,
+                }}
+              >
+                <GistItem
+                  gist={g}
+                  selected={g.id === selectedId}
+                  selectMode={selectMode}
+                  checked={checkedIds.has(g.id)}
+                  onCheck={toggleCheck}
+                  onContextMenu={openCtxMenu}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Sidebar({ style }: { style?: React.CSSProperties }) {
   const {
     gists, selectedId, searchQuery, setSearch, sync, syncStatus, createGist,
@@ -457,9 +611,15 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
   const [embedProgress, setEmbedProgress] = useState<EmbeddingProgress | null>(null);
   const semanticTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Start the background indexer once on mount and listen for progress events
+  // Start the background indexer once on mount and listen for progress events.
+  // The command returns Ok when embeddings are unconfigured, so a rejection is a
+  // genuine start failure. Runtime indexing errors arrive via "embedding-progress"
+  // (shown in the error banner below), so for the rare start failure we log for
+  // diagnostics rather than firing a toast on every mount.
   useEffect(() => {
-    startEmbeddingIndexer().catch(() => {});
+    startEmbeddingIndexer().catch((e) =>
+      console.error("[sidebar] failed to start embedding indexer:", e)
+    );
     const unlisten = listen<EmbeddingProgress>("embedding-progress", (e) => {
       setEmbedProgress(e.payload);
     });
@@ -626,12 +786,13 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
     ];
   };
 
-  const toggleCheck = (id: string) =>
+  const toggleCheck = useCallback((id: string) => {
     setCheckedIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+  }, []);
 
   const exitSelectMode = () => {
     setSelectMode(false);
@@ -656,12 +817,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
   useEffect(() => { selectGistRef.current = selectGist; }, [selectGist]);
 
-  // Scroll the selected item into view whenever it changes
-  useEffect(() => {
-    if (!selectedId || !listRef.current) return;
-    const el = listRef.current.querySelector<HTMLElement>(`[data-gist-id="${selectedId}"]`);
-    el?.scrollIntoView({ block: "nearest" });
-  }, [selectedId]);
+  // Scroll the selected item into view — handled via virtualizer.scrollToIndex below.
 
   // ↑ / ↓ / Enter keyboard navigation — fires only when no text input is focused
   // and no modal overlay is open.
@@ -719,11 +875,9 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
       searchRef.current?.blur();
     } else if (e.key === "ArrowDown") {
       e.preventDefault();
-      // Hand off navigation to the list
-      const first = listRef.current?.querySelector<HTMLElement>("[data-gist-id]");
-      if (first) {
-        const id = first.getAttribute("data-gist-id")!;
-        selectGist(id);
+      const firstId = filteredGists[0]?.id;
+      if (firstId) {
+        selectGist(firstId);
         searchRef.current?.blur();
       }
     }
@@ -905,75 +1059,25 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         )}
       </div>
 
-      <div className="sidebar__list" data-testid="gist-list" ref={listRef}>
-        {/* ── Semantic mode ──────────────────────────────────────────────── */}
-        {searchMode === "semantic" && searchQuery.trim() ? (
-          <>
-            {semanticError && (
-              <p className="sidebar__empty sidebar__empty--error">{semanticError}</p>
-            )}
-            {!semanticBusy && !semanticError && semanticGists.length === 0 && (
-              <p className="sidebar__empty">{t.sidebar.noSemanticMatches}</p>
-            )}
-            {semanticGists.map((g) => (
-              <div key={g.id} className="sidebar__semantic-item-wrap">
-                <GistItem
-                  gist={g}
-                  selected={g.id === selectedId}
-                  selectMode={selectMode}
-                  checked={checkedIds.has(g.id)}
-                  onCheck={toggleCheck}
-                  onContextMenu={openCtxMenu}
-                />
-                <div
-                  className="sidebar__score-bar"
-                  title={`Similarity: ${Math.round((semanticScoreMap.get(g.id) ?? 0) * 100)}%`}
-                >
-                  <div
-                    className="sidebar__score-bar__fill"
-                    style={{ width: `${Math.round((semanticScoreMap.get(g.id) ?? 0) * 100)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </>
-        ) : (
-          /* ── Keyword / normal mode ───────────────────────────────────── */
-          <>
-            {gists.length === 0 && syncStatus === "syncing" && (
-              <>
-                {[70, 50, 85, 55, 65].map((w, i) => (
-                  <div key={i} className="skeleton-item">
-                    <div className="skeleton skeleton-item__title" style={{ width: `${w}%` }} />
-                    <div className="skeleton skeleton-item__sub" style={{ width: `${w * 0.6}%` }} />
-                    <div className="skeleton skeleton-item__meta" style={{ width: `${w * 0.45}%` }} />
-                  </div>
-                ))}
-              </>
-            )}
-            {filteredGists.length === 0 && syncStatus !== "syncing" && (
-              <p className="sidebar__empty">
-                {isLocallyFiltered
-                  ? t.sidebar.noGistsFilter
-                  : searchQuery
-                  ? t.sidebar.noResults
-                  : t.sidebar.noGists}
-              </p>
-            )}
-            {filteredGists.map((g) => (
-              <GistItem
-                key={g.id}
-                gist={g}
-                selected={g.id === selectedId}
-                selectMode={selectMode}
-                checked={checkedIds.has(g.id)}
-                onCheck={toggleCheck}
-                onContextMenu={openCtxMenu}
-              />
-            ))}
-          </>
-        )}
-      </div>
+      <GistList
+        listRef={listRef}
+        filteredGists={filteredGists}
+        selectedId={selectedId}
+        selectMode={selectMode}
+        checkedIds={checkedIds}
+        toggleCheck={toggleCheck}
+        openCtxMenu={openCtxMenu}
+        gists={gists}
+        syncStatus={syncStatus}
+        isLocallyFiltered={isLocallyFiltered}
+        searchQuery={searchQuery}
+        searchMode={searchMode}
+        semanticError={semanticError}
+        semanticBusy={semanticBusy}
+        semanticGists={semanticGists}
+        semanticScoreMap={semanticScoreMap}
+        t={t}
+      />
 
       {selectMode && (
         <BulkActionBar

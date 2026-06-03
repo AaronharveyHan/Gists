@@ -2,9 +2,10 @@ import { useSelectedGist } from "../store/useGistStore";
 import { useGistStore } from "../store/useGistStore";
 import { useEditorUIStore } from "../store/useEditorUIStore";
 import { useThemeStore } from "../store/useThemeStore";
+import { useT } from "../store/useI18nStore";
 
-function detectLanguageLabel(filename: string | null): string {
-  if (!filename) return "Plain Text";
+function detectLanguageLabel(filename: string | null, plainText: string): string {
+  if (!filename) return plainText;
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
     ts: "TypeScript", tsx: "TypeScript (JSX)",
@@ -18,7 +19,7 @@ function detectLanguageLabel(filename: string | null): string {
     sql: "SQL", xml: "XML", php: "PHP",
     swift: "Swift", kt: "Kotlin", r: "R",
   };
-  return map[ext] ?? "Plain Text";
+  return map[ext] ?? plainText;
 }
 
 function formatBytes(bytes: number): string {
@@ -33,6 +34,7 @@ export function StatusBar() {
   const { cursorLine, cursorColumn, selectedChars, selectedLines } =
     useEditorUIStore();
   const { editorFontSize } = useThemeStore();
+  const t = useT();
 
   const { activeFilename } = useEditorUIStore();
   const activeFileObj = gist?.files.find((f) => f.filename === activeFilename) ?? gist?.files[0];
@@ -43,8 +45,8 @@ export function StatusBar() {
       <div className="statusbar__left">
         {gist && (
           <>
-            <span className="statusbar__item" title="Language">
-              {detectLanguageLabel(activeFilename)}
+            <span className="statusbar__item" title={t.statusbar.language}>
+              {detectLanguageLabel(activeFilename, t.statusbar.plainText)}
             </span>
             <span className="statusbar__sep" />
             <span className="statusbar__item">UTF-8</span>
@@ -53,7 +55,7 @@ export function StatusBar() {
             {activeFileObj && (
               <>
                 <span className="statusbar__sep" />
-                <span className="statusbar__item" title="File size">
+                <span className="statusbar__item" title={t.statusbar.fileSize}>
                   {formatBytes(activeFileObj.size)}
                 </span>
               </>
@@ -65,33 +67,31 @@ export function StatusBar() {
         {gist && (
           <>
             <span className="statusbar__item">
-              Ln {cursorLine}, Col {cursorColumn}
+              {t.statusbar.lineCol(cursorLine, cursorColumn)}
             </span>
             {selectedChars > 0 && (
               <>
                 <span className="statusbar__sep" />
                 <span className="statusbar__item statusbar__item--accent">
-                  {selectedChars} selected
-                  {selectedLines > 1 && ` (${selectedLines} lines)`}
+                  {t.statusbar.selectedChars(selectedChars, selectedLines)}
                 </span>
               </>
             )}
             <span className="statusbar__sep" />
             <span className="statusbar__item">
-              {gist.files.length} file{gist.files.length !== 1 ? "s" : ""}
-              {totalSize > 0 && ` (${formatBytes(totalSize)})`}
+              {t.statusbar.filesCount(gist.files.length, totalSize > 0 ? formatBytes(totalSize) : "")}
             </span>
             <span className="statusbar__sep" />
             <span
               className={`statusbar__item ${gist.public ? "" : "statusbar__item--muted"}`}
-              title={gist.public ? "Public gist" : "Secret gist"}
+              title={gist.public ? t.statusbar.publicGist : t.statusbar.secretGist}
             >
-              {gist.public ? "Public" : "Secret"}
+              {gist.public ? t.statusbar.public : t.statusbar.secret}
             </span>
           </>
         )}
         <span className="statusbar__sep" />
-        <span className="statusbar__item" title="Font size">
+        <span className="statusbar__item" title={t.statusbar.fontSize}>
           {editorFontSize}px
         </span>
         <span className="statusbar__sep" />
@@ -99,10 +99,10 @@ export function StatusBar() {
           className={`statusbar__item ${syncStatus === "syncing" ? "statusbar__item--accent" : ""} ${syncStatus === "error" ? "statusbar__item--error" : ""}`}
         >
           {syncStatus === "syncing"
-            ? "Syncing..."
+            ? t.statusbar.syncing
             : syncStatus === "error"
-              ? "Sync error"
-              : `${gists.length} gists`}
+              ? t.statusbar.syncError
+              : t.statusbar.gistsCount(gists.length)}
         </span>
       </div>
     </footer>

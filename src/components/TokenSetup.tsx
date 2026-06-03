@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { setToken } from "../api/tauri";
 import { useGistStore } from "../store/useGistStore";
+import { useT } from "../store/useI18nStore";
 import { open } from "@tauri-apps/plugin-shell";
 
 export function TokenSetup() {
@@ -8,6 +9,7 @@ export function TokenSetup() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { setAuthenticated, sync } = useGistStore();
+  const t = useT();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,8 +47,8 @@ export function TokenSetup() {
             />
           </svg>
         </div>
-        <h1>Gists Client</h1>
-        <p>Enter your GitHub Personal Access Token with <code>gist</code> scope.</p>
+        <h1>{t.tokenSetup.appName}</h1>
+        <p>{t.tokenSetup.scopePre}<code>gist</code>{t.tokenSetup.scopePost}</p>
         <form onSubmit={handleSubmit}>
           <input
             type="password"
@@ -57,7 +59,7 @@ export function TokenSetup() {
             disabled={loading}
           />
           <button type="submit" disabled={loading || !value.trim()}>
-            {loading ? "Verifying…" : "Connect"}
+            {loading ? t.tokenSetup.verifying : t.tokenSetup.connect}
           </button>
         </form>
         {error && <p className="token-setup__error">{error}</p>}
@@ -67,7 +69,7 @@ export function TokenSetup() {
             open("https://github.com/settings/tokens/new?scopes=gist")
           }
         >
-          Generate a token ↗
+          {t.tokenSetup.generateToken}
         </button>
       </div>
     </div>

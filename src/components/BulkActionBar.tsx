@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useGistStore } from "../store/useGistStore";
 import { notify } from "../store/useNotificationStore";
 import type { Gist, Tag } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 interface Props {
   selectedIds: Set<string>;
@@ -20,6 +21,7 @@ export function BulkActionBar({
   selectedIds, allTags, sortedGists, onClear, onSelectAll,
 }: Props) {
   const { deleteGist, setGistTags, loadGistTags, gistTags, gists } = useGistStore();
+  const t = useT();
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
@@ -71,20 +73,20 @@ export function BulkActionBar({
   // ── Actions ───────────────────────────────────────────────────────────────
 
   const handleDelete = async () => {
-    if (!confirm(`Delete ${count} gist${count !== 1 ? "s" : ""}? This cannot be undone.`)) return;
+    if (!confirm(t.bulk.confirmDelete(count))) return;
     setBusy(true);
-    setProgress({ done: 0, total: count, label: "Deleting" });
+    setProgress({ done: 0, total: count, label: t.bulk.deleting });
     let done = 0;
     try {
       for (const id of selectedIds) {
         await deleteGist(id);
         done++;
-        setProgress({ done, total: count, label: "Deleting" });
+        setProgress({ done, total: count, label: t.bulk.deleting });
       }
-      notify(`Deleted ${count} gist${count !== 1 ? "s" : ""}`, "success");
+      notify(t.bulk.deleted(count), "success");
       onClear();
     } catch (e) {
-      notify("Bulk delete failed: " + String(e));
+      notify(t.bulk.deleteFailed(String(e)));
     } finally {
       setBusy(false);
       setProgress(null);
@@ -98,14 +100,14 @@ export function BulkActionBar({
     );
     if (targets.length === 0) return;
     setBusy(true);
-    setProgress({ done: 0, total: targets.length, label: "Tagging" });
+    setProgress({ done: 0, total: targets.length, label: t.bulk.tagging });
     let done = 0;
     try {
       for (const gistId of targets) {
-        const current = (gistTags[gistId] ?? []).map((t) => t.id);
+        const current = (gistTags[gistId] ?? []).map((tg) => tg.id);
         await setGistTags(gistId, [...current, tagId]);
         done++;
-        setProgress({ done, total: targets.length, label: "Tagging" });
+        setProgress({ done, total: targets.length, label: t.bulk.tagging });
       }
     } finally {
       setBusy(false);
@@ -115,14 +117,14 @@ export function BulkActionBar({
 
   const handleRemoveTag = async (tagId: number) => {
     setBusy(true);
-    setProgress({ done: 0, total: count, label: "Removing tag" });
+    setProgress({ done: 0, total: count, label: t.bulk.removingTag });
     let done = 0;
     try {
       for (const gistId of selectedIds) {
-        const current = (gistTags[gistId] ?? []).map((t) => t.id).filter((id) => id !== tagId);
+        const current = (gistTags[gistId] ?? []).map((tg) => tg.id).filter((id) => id !== tagId);
         await setGistTags(gistId, current);
         done++;
-        setProgress({ done, total: count, label: "Removing tag" });
+        setProgress({ done, total: count, label: t.bulk.removingTag });
       }
     } finally {
       setBusy(false);
@@ -133,7 +135,7 @@ export function BulkActionBar({
   const handleExport = async () => {
     const { save } = await import("@tauri-apps/plugin-dialog");
     const dest = await save({
-      title: "Export selected gists",
+      title: t.bulk.exportDialogTitle,
       defaultPath: `gists-selection-${count}.json`,
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
@@ -142,9 +144,9 @@ export function BulkActionBar({
     try {
       const { writeTextFile } = await import("@tauri-apps/plugin-fs");
       await writeTextFile(dest, JSON.stringify(selectedGists, null, 2));
-      notify(`Exported ${count} gist${count !== 1 ? "s" : ""}`, "success");
+      notify(t.bulk.exported(count), "success");
     } catch (e) {
-      notify("Export failed: " + String(e));
+      notify(t.bulk.exportFailed(String(e)));
     } finally {
       setBusy(false);
     }
@@ -160,10 +162,10 @@ export function BulkActionBar({
           <strong>{count}</strong>
           {" / "}
           <span className="bulk-bar__total">{totalVisible}</span>
-          {" selected"}
+          {" "}{t.bulk.selected}
           {count > 0 && publicCount > 0 && secretCount > 0 && (
             <span className="bulk-bar__meta">
-              {" · "}{publicCount} public · {secretCount} secret
+              {" · "}{publicCount} {t.bulk.public} · {secretCount} {t.bulk.secret}
             </span>
           )}
         </span>
@@ -171,12 +173,12 @@ export function BulkActionBar({
         <div className="bulk-bar__selectors">
           {!allSelected && totalVisible > 0 && (
             <button className="bulk-bar__link" onClick={onSelectAll} disabled={busy}>
-              Select all {totalVisible}
+              {t.bulk.selectAll(totalVisible)}
             </button>
           )}
           {count > 0 && (
             <button className="bulk-bar__link" onClick={onClear} disabled={busy}>
-              Clear
+              {t.common.clear}
             </button>
           )}
         </div>
@@ -205,9 +207,9 @@ export function BulkActionBar({
                 className="bulk-bar__btn"
                 onClick={() => setTagPickerOpen((o) => !o)}
                 disabled={busy}
-                title="Add a tag to all selected gists"
+                title={t.bulk.addTagTitle}
               >
-                + Tag
+                {t.bulk.addTag}
               </button>
               {tagPickerOpen && (
                 <div className="bulk-bar__tag-dropdown">
@@ -237,7 +239,7 @@ export function BulkActionBar({
                 style={{ "--tag-color": tag.color } as React.CSSProperties}
                 onClick={() => handleRemoveTag(tagId)}
                 disabled={busy}
-                title={`Remove tag "${tag.name}" from all selected`}
+                title={t.bulk.removeTagTitle(tag.name)}
               >
                 <span className="bulk-bar__tag-dot" style={{ background: tag.color }} />
                 {tag.name} ×
@@ -249,9 +251,9 @@ export function BulkActionBar({
             className="bulk-bar__btn"
             onClick={handleExport}
             disabled={busy}
-            title={`Export ${count} selected gist${count !== 1 ? "s" : ""} to JSON`}
+            title={t.bulk.exportBtnTitle(count)}
           >
-            Export
+            {t.bulk.exportBtn}
           </button>
 
           <button
@@ -259,7 +261,7 @@ export function BulkActionBar({
             onClick={handleDelete}
             disabled={busy}
           >
-            Delete {count}
+            {t.bulk.deleteBtn(count)}
           </button>
         </div>
       )}

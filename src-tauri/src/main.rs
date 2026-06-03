@@ -64,6 +64,7 @@ fn main() {
                                 .ok()
                                 .flatten()
                                 .filter(|t| !t.is_empty())
+                                .and_then(|raw| gists_client::auth::decrypt_from_db(&raw))
                         });
                     if let Some(token) = legacy_token {
                         let login = gists_client::db::get_setting("gh_login")
@@ -76,19 +77,32 @@ fn main() {
                             None,
                         ) {
                             let key = format!("gists_client_acct_{}", id);
-                            gists_client::auth::keyring_set_for(&key, &token);
+                            // Prefer keychain; write encrypted DB entry as fallback.
+                            if !gists_client::auth::keyring_set_for_checked(&key, &token) {
+                                if let Ok(enc) = gists_client::auth::encrypt_for_db(&token) {
+                                    let _ = gists_client::db::set_setting(
+                                        &format!("token_acct_{}", id),
+                                        &enc,
+                                    );
+                                }
+                            } else {
+                                let _ = gists_client::db::set_setting(
+                                    &format!("token_acct_{}", id),
+                                    "",
+                                );
+                            }
                             let _ = gists_client::db::set_active_account(id);
-                            let _ = gists_client::db::set_setting(
-                                &format!("token_acct_{}", id),
-                                &token,
-                            );
                         }
                     }
                 }
             }
 
             let saved_token = commands::keyring_get().or_else(|| {
-                db::get_setting("token").ok().flatten().filter(|t| !t.is_empty())
+                db::get_setting("token")
+                    .ok()
+                    .flatten()
+                    .filter(|t| !t.is_empty())
+                    .and_then(|raw| gists_client::auth::decrypt_from_db(&raw))
             });
             if let Some(token) = saved_token {
                 let state = app.state::<AppState>();
@@ -254,6 +268,8 @@ fn main() {
             commands::start_embedding_indexer,
             commands::ai_complete,
             commands::find_duplicate_gists,
+            commands::local_embedding_status,
+            commands::download_local_embedding_model,
             commands::list_collections,
             commands::list_collection_counts,
             commands::create_collection,

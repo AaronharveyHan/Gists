@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../api/tauri";
 import type { GistFile, GistRevisionView } from "../api/tauri";
 import { notify } from "../store/useNotificationStore";
+import { useT } from "../store/useI18nStore";
 
 // ── Diff parser (mirrors DiffModal) ──────────────────────────────────────────
 
@@ -87,8 +88,9 @@ function lineClass(kind: DiffLineKind) {
 }
 
 function DiffTable({ diff }: { diff: string }) {
+  const t = useT();
   const trimmed = diff.trim();
-  if (!trimmed) return <p className="modal__muted">(no changes)</p>;
+  if (!trimmed) return <p className="modal__muted">{t.diff.noChanges}</p>;
   const files = parseUnifiedDiff(diff);
   if (files.length === 0) return <pre className="git-diff-pre git-diff-pre--raw">{diff}</pre>;
   return (
@@ -99,9 +101,9 @@ function DiffTable({ diff }: { diff: string }) {
           <table className="diff-table">
             <thead>
               <tr>
-                <th className="diff-table__col-old">Old</th>
-                <th className="diff-table__col-new">New</th>
-                <th className="diff-table__col-code">Change</th>
+                <th className="diff-table__col-old">{t.diff.colOld}</th>
+                <th className="diff-table__col-new">{t.diff.colNew}</th>
+                <th className="diff-table__col-code">{t.diff.colChange}</th>
               </tr>
             </thead>
             <tbody>
@@ -134,11 +136,11 @@ function DiffTable({ diff }: { diff: string }) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function fmtRel(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso || "—";
-  const s = Math.round((t - Date.now()) / 1000);
-  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+function fmtRel(iso: string, locale: string): string {
+  const ts = Date.parse(iso);
+  if (Number.isNaN(ts)) return iso || "—";
+  const s = Math.round((ts - Date.now()) / 1000);
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
   const a = Math.abs(s);
   if (a < 60) return rtf.format(Math.round(s), "second");
   if (a < 3600) return rtf.format(Math.round(s / 60), "minute");
@@ -160,6 +162,8 @@ export interface RevisionBrowserProps {
 export function RevisionBrowser({
   gistId, currentFiles, onRestore, onClose,
 }: RevisionBrowserProps) {
+  const t = useT();
+  const locale = t.common.rtfLocale;
   const [tab, setTab] = useState<"revisions" | "working">("revisions");
 
   const [revisions, setRevisions] = useState<GistRevisionView[]>([]);
@@ -232,9 +236,9 @@ export function RevisionBrowser({
     try {
       const gist = await api.fetchGistAtRev(gistId, sha);
       onRestore(gist.files, gist.description);
-      notify(`Restored to ${sha.slice(0, 7)}`, "success");
+      notify(t.diff.restored(sha.slice(0, 7)), "success");
     } catch (e) {
-      notify("Restore failed: " + String(e));
+      notify(t.diff.restoreFailed(String(e)));
     } finally {
       setRestoring(null);
     }
@@ -244,20 +248,20 @@ export function RevisionBrowser({
     <aside className="revision-browser">
       {/* Header */}
       <div className="revision-browser__head">
-        <span className="revision-browser__title">History</span>
-        <button className="revision-browser__close" onClick={onClose} title="Close (Esc)">✕</button>
+        <span className="revision-browser__title">{t.diff.historyTitle}</span>
+        <button className="revision-browser__close" onClick={onClose} title={t.diff.closeEsc}>✕</button>
       </div>
 
       {/* Tabs */}
       <div className="revision-browser__tabs">
-        {(["revisions", "working"] as const).map((t) => (
+        {(["revisions", "working"] as const).map((tb) => (
           <button
-            key={t}
-            className={`revision-browser__tab ${tab === t ? "revision-browser__tab--active" : ""}`}
-            onClick={() => setTab(t)}
+            key={tb}
+            className={`revision-browser__tab ${tab === tb ? "revision-browser__tab--active" : ""}`}
+            onClick={() => setTab(tb)}
           >
-            {t === "revisions" ? "Revisions" : "Working tree"}
-            {t === "revisions" && revisions.length > 0 && (
+            {tb === "revisions" ? t.diff.tabRevisions : t.diff.tabWorking}
+            {tb === "revisions" && revisions.length > 0 && (
               <span className="revision-browser__tab-count">{revisions.length}</span>
             )}
           </button>
@@ -270,10 +274,10 @@ export function RevisionBrowser({
         {/* ── Revisions tab ────────────────────────────────────────── */}
         {tab === "revisions" && (
           <>
-            {revLoading && <p className="revision-browser__msg">Loading history…</p>}
+            {revLoading && <p className="revision-browser__msg">{t.diff.loadingHistory}</p>}
             {revError && <p className="revision-browser__err">{revError}</p>}
             {!revLoading && !revError && revisions.length === 0 && (
-              <p className="revision-browser__msg">No revisions found.</p>
+              <p className="revision-browser__msg">{t.diff.noRevisions}</p>
             )}
             <div className="rev-list">
               {revisions.map((rev, idx) => {
@@ -287,7 +291,7 @@ export function RevisionBrowser({
                     >
                       <div className="rev-item__row1">
                         <span className="rev-item__sha">{rev.short_sha}</span>
-                        <span className="rev-item__time">{fmtRel(rev.committed_at)}</span>
+                        <span className="rev-item__time">{fmtRel(rev.committed_at, locale)}</span>
                       </div>
                       <div className="rev-item__row2">
                         <span className="rev-item__author">@{rev.author_login}</span>
@@ -308,13 +312,13 @@ export function RevisionBrowser({
                     {isOpen && (
                       <div className="rev-item__diff">
                         {revDiffLoading && (
-                          <p className="revision-browser__msg">Loading diff…</p>
+                          <p className="revision-browser__msg">{t.diff.loadingDiff}</p>
                         )}
                         {revDiffError && (
                           <p className="revision-browser__err">{revDiffError}</p>
                         )}
                         {!revDiffLoading && !revDiffError && (
-                          <DiffTable diff={revDiff || "(no changes in this revision)"} />
+                          <DiffTable diff={revDiff || t.diff.noChangesInRevision} />
                         )}
                         <div className="rev-item__restore-row">
                           <button
@@ -322,7 +326,7 @@ export function RevisionBrowser({
                             onClick={() => void handleRestore(rev.sha)}
                             disabled={restoring !== null}
                           >
-                            {restoring === rev.sha ? "Restoring…" : "Restore to this version"}
+                            {restoring === rev.sha ? t.diff.restoring : t.diff.restoreToVersion}
                           </button>
                         </div>
                       </div>
@@ -337,11 +341,11 @@ export function RevisionBrowser({
         {/* ── Working tree tab ─────────────────────────────────────── */}
         {tab === "working" && (
           <>
-            {workingLoading && <p className="revision-browser__msg">Computing diff…</p>}
+            {workingLoading && <p className="revision-browser__msg">{t.diff.computingDiff}</p>}
             {workingError && <p className="revision-browser__err">{workingError}</p>}
             {!workingLoading && !workingError && (
               <DiffTable
-                diff={workingDiff.trim() || "(No changes — working tree matches remote snapshot.)"}
+                diff={workingDiff.trim() || t.diff.noChangesWorking}
               />
             )}
           </>

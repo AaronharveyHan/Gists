@@ -24,3 +24,12 @@ export function useT() {
   const lang = useI18nStore((s) => s.lang);
   return translations[lang];
 }
+
+/**
+ * Non-reactive translation accessor for use outside React render (class
+ * components, event handlers, module-level helpers). Does not re-render on
+ * language change — read it at call time.
+ */
+export function getT() {
+  return translations[useI18nStore.getState().lang];
+}

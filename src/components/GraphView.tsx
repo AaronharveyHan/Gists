@@ -5,13 +5,17 @@
  *         one per tag  (larger circle, colored by tag color).
  * Edges:  gist ↔ tag when the gist has that tag.
  *
- * Physics: custom Euler-integration force simulation (no extra deps).
+ * Physics: custom Euler-integration simulation running in a Web Worker so
+ *          the main thread is never blocked, even at 300+ nodes.
+ * Pruning: only connected gists are shown; capped at MAX_VISIBLE_NODES total
+ *          (highest-degree gists kept first) to maintain interactive frame rates.
  * Rendering: HTML Canvas with DPR-aware scaling.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useGistStore } from "../store/useGistStore";
 import { listGistTagPairs } from "../api/tauri";
 import type { Gist, Tag } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -26,6 +30,7 @@ interface SimNode {
   y: number;
   vx: number;
   vy: number;
+  workerIdx: number; // index in the worker's flat position array
   gistData?: Gist;
   tagData?: Tag;
 }
@@ -65,56 +70,11 @@ function nodeColor(g: Gist): string {
   return LANG_COLORS.other;
 }
 
-// ── Force simulation ──────────────────────────────────────────────────────────
-
-const K_REPEL   = 3000;
-const K_SPRING  = 0.032;
-const REST_BASE = 90;
-const K_GRAVITY = 0.002;
-const DAMPING   = 0.77;
-
-function tick(nodes: SimNode[], edges: SimEdge[]) {
-  // Pairwise repulsion (Barnes–Hut would help at 500+ nodes; at ~200 this is fine)
-  for (let i = 0; i < nodes.length; i++) {
-    for (let j = i + 1; j < nodes.length; j++) {
-      const a = nodes[i];
-      const b = nodes[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const d2 = dx * dx + dy * dy || 0.001;
-      const d  = Math.sqrt(d2);
-      const cutoff = (a.r + b.r) * 4;
-      if (d < cutoff) {
-        const f  = K_REPEL / d2;
-        const fx = (f * dx) / d;
-        const fy = (f * dy) / d;
-        a.vx -= fx;  a.vy -= fy;
-        b.vx += fx;  b.vy += fy;
-      }
-    }
-  }
-
-  // Spring forces along edges
-  for (const e of edges) {
-    const dx  = e.t.x - e.s.x;
-    const dy  = e.t.y - e.s.y;
-    const d   = Math.sqrt(dx * dx + dy * dy) || 0.001;
-    const rest = REST_BASE + e.s.r + e.t.r;
-    const f   = K_SPRING * (d - rest);
-    const fx  = (f * dx) / d;
-    const fy  = (f * dy) / d;
-    e.s.vx += fx;  e.s.vy += fy;
-    e.t.vx -= fx;  e.t.vy -= fy;
-  }
-
-  // Gravity toward origin + damping + Euler integration
-  for (const n of nodes) {
-    n.vx = (n.vx - n.x * K_GRAVITY) * DAMPING;
-    n.vy = (n.vy - n.y * K_GRAVITY) * DAMPING;
-    n.x += n.vx;
-    n.y += n.vy;
-  }
-}
+// ── Visibility cap ────────────────────────────────────────────────────────────
+// At 250 nodes the O(n²) repulsion in the worker is ~31 K pairs — well under
+// 1 ms per tick.  Beyond this the simulation stays smooth but the canvas
+// render itself starts to slow down.
+const MAX_VISIBLE_NODES = 250;
 
 // ── Canvas renderer ───────────────────────────────────────────────────────────
 
@@ -249,26 +209,26 @@ export function GraphView({
   onSelectGist: (id: string) => void;
 }) {
   const { gists, allTags } = useGistStore();
+  const t = useT();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState({ gists: 0, tags: 0, edges: 0 });
+  const [stats, setStats] = useState({ gists: 0, tags: 0, edges: 0, hidden: 0 });
+  const [showAll, setShowAll] = useState(false);
 
   // Rendering state — all in refs to avoid triggering re-renders in the RAF loop
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const nodesRef    = useRef<SimNode[]>([]);
-  const edgesRef    = useRef<SimEdge[]>([]);
-  const hoveredRef  = useRef<SimNode | null>(null);
-  const selectedRef = useRef<SimNode | null>(null);
-  const draggedRef  = useRef<SimNode | null>(null);
-  const dragOffRef  = useRef({ x: 0, y: 0 });
-  const panRef      = useRef({ x: 0, y: 0 });
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const nodesRef     = useRef<SimNode[]>([]);
+  const edgesRef     = useRef<SimEdge[]>([]);
+  const hoveredRef   = useRef<SimNode | null>(null);
+  const selectedRef  = useRef<SimNode | null>(null);
+  const draggedRef   = useRef<SimNode | null>(null);
+  const dragOffRef   = useRef({ x: 0, y: 0 });
+  const panRef       = useRef({ x: 0, y: 0 });
   const panOriginRef = useRef({ mx: 0, my: 0, px: 0, py: 0 });
   const isPanningRef = useRef(false);
-  const scaleRef    = useRef(1);
-  const rafRef      = useRef<number | null>(null);
-  const iterRef     = useRef(0);
-  const MAX_ITER    = 450;
-  // Track mousedown position to distinguish click vs drag
-  const mdPosRef    = useRef({ x: 0, y: 0 });
+  const scaleRef     = useRef(1);
+  const rafRef       = useRef<number | null>(null);
+  const mdPosRef     = useRef({ x: 0, y: 0 });
+  const workerRef    = useRef<Worker | null>(null);
 
   const [tooltip, setTooltip] = useState<{
     x: number; y: number; node: SimNode;
@@ -297,7 +257,7 @@ export function GraphView({
     return null;
   }, []);
 
-  // ── Build graph data ───────────────────────────────────────────────────────
+  // ── Build graph data + spawn/replace worker ────────────────────────────────
 
   useEffect(() => {
     let cancelled = false;
@@ -307,9 +267,33 @@ export function GraphView({
       const pairs = await listGistTagPairs().catch(() => [] as [string, number][]);
       if (cancelled) return;
 
-      // Map tag id → node
+      // ── Node selection ────────────────────────────────────────────────────
+      const connectedGistIds = new Set<string>(pairs.map(([gid]) => gid));
+      const connectedTagIds  = new Set<number>(
+        pairs.filter(([gid]) => connectedGistIds.has(gid)).map(([, tid]) => tid),
+      );
+
+      const visibleTags  = allTags.filter(t => connectedTagIds.has(t.id));
+      // "Show all" mode: every gist; "connected" mode: only gists with a tag.
+      const candidateGists = showAll ? gists : gists.filter(g => connectedGistIds.has(g.id));
+
+      // If still over cap, keep connected gists first then fill with isolated ones
+      // (both sorted by degree so the most-linked appear first).
+      let finalGists = candidateGists;
+      let hidden = 0;
+      if (visibleTags.length + candidateGists.length > MAX_VISIBLE_NODES) {
+        const gistDeg = new Map<string, number>();
+        for (const [gid] of pairs) gistDeg.set(gid, (gistDeg.get(gid) ?? 0) + 1);
+        const gistSlots = Math.max(0, MAX_VISIBLE_NODES - visibleTags.length);
+        finalGists = [...candidateGists]
+          .sort((a, b) => (gistDeg.get(b.id) ?? 0) - (gistDeg.get(a.id) ?? 0))
+          .slice(0, gistSlots);
+        hidden = candidateGists.length - finalGists.length;
+      }
+
+      // ── Node construction ──────────────────────────────────────────────────
       const tagNodes = new Map<number, SimNode>();
-      for (const tag of allTags) {
+      visibleTags.forEach((tag, idx) => {
         tagNodes.set(tag.id, {
           id: `tag-${tag.id}`,
           type: "tag",
@@ -320,13 +304,14 @@ export function GraphView({
           x: (Math.random() - 0.5) * 180,
           y: (Math.random() - 0.5) * 180,
           vx: 0, vy: 0,
+          workerIdx: idx,
           tagData: tag,
         });
-      }
+      });
 
-      // Map gist id → node
+      const tagCount = tagNodes.size;
       const gistNodes = new Map<string, SimNode>();
-      for (const g of gists) {
+      finalGists.forEach((g, idx) => {
         const r = Math.max(7, Math.min(13, 6 + g.files.length * 1.5));
         gistNodes.set(g.id, {
           id: `gist-${g.id}`,
@@ -338,27 +323,28 @@ export function GraphView({
           x: (Math.random() - 0.5) * 500,
           y: (Math.random() - 0.5) * 500,
           vx: 0, vy: 0,
+          workerIdx: tagCount + idx,
           gistData: g,
         });
-      }
+      });
 
-      // Build edges + seed gist positions near their tags
+      // ── Edges + seed gist positions near their first tag ──────────────────
+      const finalGistIdSet = new Set(finalGists.map(g => g.id));
       const edges: SimEdge[] = [];
+      const seededGists = new Set<string>();
       for (const [gistId, tagId] of pairs) {
         const gn = gistNodes.get(gistId);
         const tn = tagNodes.get(tagId);
-        if (!gn || !tn) continue;
-        if (edges.length === 0 || edges[edges.length - 1].s !== gn || edges[edges.length - 1].t !== tn) {
-          // Only seed position on the first edge for this gist
-          if (!edges.some((e) => e.s === gn)) {
-            gn.x = tn.x + (Math.random() - 0.5) * 80;
-            gn.y = tn.y + (Math.random() - 0.5) * 80;
-          }
+        if (!gn || !tn || !finalGistIdSet.has(gistId)) continue;
+        if (!seededGists.has(gistId)) {
+          gn.x = tn.x + (Math.random() - 0.5) * 80;
+          gn.y = tn.y + (Math.random() - 0.5) * 80;
+          seededGists.add(gistId);
         }
         edges.push({ s: gn, t: tn });
       }
 
-      // Scale tag node size by degree
+      // ── Scale tag node size by degree ─────────────────────────────────────
       const tagDeg = new Map<number, number>();
       for (const [, tagId] of pairs) tagDeg.set(tagId, (tagDeg.get(tagId) ?? 0) + 1);
       for (const [tagId, deg] of tagDeg) {
@@ -368,35 +354,90 @@ export function GraphView({
 
       if (cancelled) return;
 
-      nodesRef.current = [
+      // Ordered array: tags first (workerIdx 0..tagCount-1), then gists.
+      const allNodes: SimNode[] = [
         ...Array.from(tagNodes.values()),
         ...Array.from(gistNodes.values()),
       ];
+
+      nodesRef.current = allNodes;
       edgesRef.current = edges;
-      iterRef.current  = 0;
+
+      // ── Pack into typed arrays for zero-copy transfer to worker ───────────
+      const n = allNodes.length;
+      const positions = new Float64Array(n * 4); // [x,y,vx,vy per node]
+      const radii     = new Float32Array(n);
+      const edgeArr   = new Uint32Array(edges.length * 2);
+
+      allNodes.forEach((node, i) => {
+        positions[i * 4]     = node.x;
+        positions[i * 4 + 1] = node.y;
+        positions[i * 4 + 2] = node.vx;
+        positions[i * 4 + 3] = node.vy;
+        radii[i] = node.r;
+      });
+      edges.forEach((e, i) => {
+        edgeArr[i * 2]     = e.s.workerIdx;
+        edgeArr[i * 2 + 1] = e.t.workerIdx;
+      });
+
+      // ── Terminate old worker, spawn new one ───────────────────────────────
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: "stop" });
+        workerRef.current.terminate();
+      }
+      const worker = new Worker(
+        new URL("../workers/graphSimulation.worker.ts", import.meta.url),
+        { type: "module" },
+      );
+      workerRef.current = worker;
+
+      worker.onmessage = (e: MessageEvent<{ type: string; data: Float64Array }>) => {
+        if (e.data.type !== "positions") return;
+        const data = e.data.data;
+        const nodes = nodesRef.current;
+        const dragged = draggedRef.current;
+        for (let i = 0; i < nodes.length; i++) {
+          // Don't overwrite the node the user is currently dragging —
+          // its position is set synchronously in onMouseMove.
+          if (nodes[i] === dragged) continue;
+          nodes[i].x = data[i * 2];
+          nodes[i].y = data[i * 2 + 1];
+        }
+      };
+
+      // Transfer typed arrays (zero-copy): worker now owns those buffers.
+      worker.postMessage(
+        { type: "init", nodeCount: n, positions, radii, edges: edgeArr },
+        [positions.buffer, radii.buffer, edgeArr.buffer],
+      );
 
       setStats({
         gists: gistNodes.size,
         tags:  tagNodes.size,
         edges: edges.length,
+        hidden,
       });
       setLoading(false);
     };
 
     build();
-    return () => { cancelled = true; };
-  }, [gists, allTags]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true;
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: "stop" });
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, [gists, allTags, showAll]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Animation loop ─────────────────────────────────────────────────────────
+  // ── RAF render loop (main thread only renders — no physics) ───────────────
 
   useEffect(() => {
     if (loading) return;
 
     const loop = () => {
-      if (iterRef.current < MAX_ITER) {
-        tick(nodesRef.current, edgesRef.current);
-        iterRef.current++;
-      }
       const canvas = canvasRef.current;
       if (canvas) {
         render(
@@ -454,11 +495,19 @@ export function GraphView({
     const { x, y } = toWorld(e.clientX, e.clientY);
 
     if (draggedRef.current) {
-      draggedRef.current.x  = x - dragOffRef.current.x;
-      draggedRef.current.y  = y - dragOffRef.current.y;
+      const nx = x - dragOffRef.current.x;
+      const ny = y - dragOffRef.current.y;
+      draggedRef.current.x  = nx;
+      draggedRef.current.y  = ny;
       draggedRef.current.vx = 0;
       draggedRef.current.vy = 0;
-      iterRef.current = 0; // Re-energise simulation
+      // Tell worker to pin this node at the new position and re-energise.
+      workerRef.current?.postMessage({
+        type: "drag",
+        index: draggedRef.current.workerIdx,
+        x: nx,
+        y: ny,
+      });
       setTooltip(null);
       return;
     }
@@ -484,6 +533,9 @@ export function GraphView({
   }, [toWorld, hitTest]);
 
   const onMouseUp = useCallback(() => {
+    if (draggedRef.current) {
+      workerRef.current?.postMessage({ type: "dragEnd" });
+    }
     draggedRef.current  = null;
     isPanningRef.current = false;
   }, []);
@@ -505,6 +557,9 @@ export function GraphView({
   }, [toWorld, hitTest, onSelectGist]);
 
   const onMouseLeave = useCallback(() => {
+    if (draggedRef.current) {
+      workerRef.current?.postMessage({ type: "dragEnd" });
+    }
     hoveredRef.current   = null;
     draggedRef.current   = null;
     isPanningRef.current = false;
@@ -512,18 +567,14 @@ export function GraphView({
   }, []);
 
   const resetView = useCallback(() => {
-    scaleRef.current  = 1;
-    panRef.current    = { x: 0, y: 0 };
+    scaleRef.current = 1;
+    panRef.current   = { x: 0, y: 0 };
   }, []);
 
   const relayout = useCallback(() => {
-    for (const n of nodesRef.current) {
-      n.x = (Math.random() - 0.5) * 400;
-      n.y = (Math.random() - 0.5) * 400;
-      n.vx = 0;
-      n.vy = 0;
-    }
-    iterRef.current = 0;
+    // Randomise positions in the worker; it will start re-simulating and
+    // post updated positions back.  No need to touch nodesRef directly.
+    workerRef.current?.postMessage({ type: "relayout" });
   }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -536,12 +587,24 @@ export function GraphView({
           {!loading && (
             <span className="graph-view__stats">
               {stats.gists} gists · {stats.tags} tags · {stats.edges} connections
+              {stats.hidden > 0 && (
+                <span className="graph-view__stats-hidden" title="Over the 250-node cap; highest-degree gists shown first">
+                  {" "}· {stats.hidden} over cap
+                </span>
+              )}
             </span>
           )}
         </div>
         <div className="graph-view__controls">
           {!loading && (
             <>
+              <button
+                className={`btn graph-view__toggle${showAll ? " graph-view__toggle--active" : ""}`}
+                onClick={() => setShowAll(v => !v)}
+                title={showAll ? t.graph.toggleShowAllTitle : t.graph.toggleConnectedTitle}
+              >
+                {showAll ? t.graph.showAll : t.graph.showConnected}
+              </button>
               <button className="btn" onClick={resetView} title="Reset zoom & pan">
                 Reset view
               </button>
@@ -599,7 +662,7 @@ export function GraphView({
             <div className="graph-view__legend-divider" />
             <div className="graph-view__legend-row">
               <span className="graph-view__legend-dot graph-view__legend-dot--tag" />
-              <span>Tag node</span>
+              <span>{t.graph.tagNode}</span>
             </div>
             <div className="graph-view__legend-tip">
               Scroll → zoom<br />

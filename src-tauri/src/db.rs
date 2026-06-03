@@ -181,6 +181,11 @@ pub fn init_db(app_dir: &str) -> Result<()> {
         CREATE INDEX IF NOT EXISTS idx_run_history_gist
             ON run_history(gist_id, filename, ran_at DESC);",
     )?;
+    // Added after initial release: flags rows whose output was clipped at 100 KB.
+    let _ = conn.execute(
+        "ALTER TABLE run_history ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
 
     // ── FTS v2 migration ──────────────────────────────────────────────────────
     // Upgrades the contentless FTS5 table to a full-content table with
@@ -325,6 +330,11 @@ fn migrate_links_v1(conn: &Connection) -> Result<()> {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+// On lock poisoning (a previous holder panicked) we recover the guard via
+// `into_inner()` instead of propagating an error forever. The SQLite connection
+// remains valid after a panic — incomplete statements are simply dropped — so
+// bricking every subsequent DB call would be worse than continuing. The lock is
+// never held across an `.await`, so poisoning is rare to begin with.
 pub fn with_db<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&Connection) -> Result<T>,
@@ -333,7 +343,7 @@ where
         .get()
         .ok_or_else(|| anyhow::anyhow!("DB not initialized"))?
         .lock()
-        .map_err(|_| anyhow::anyhow!("DB lock poisoned"))?;
+        .unwrap_or_else(|e| e.into_inner());
     f(&*guard)
 }
 
@@ -345,7 +355,7 @@ where
         .get()
         .ok_or_else(|| anyhow::anyhow!("DB not initialized"))?
         .lock()
-        .map_err(|_| anyhow::anyhow!("DB lock poisoned"))?;
+        .unwrap_or_else(|e| e.into_inner());
     f(&mut *guard)
 }
 
@@ -469,16 +479,17 @@ pub fn insert_run(
     duration_ms: i64,
     timed_out: bool,
     killed: bool,
+    truncated: bool,
 ) -> Result<i64> {
     with_db_mut(|conn| {
         conn.execute(
             "INSERT INTO run_history
-             (gist_id, filename, exit_code, stdout, stderr, duration_ms, timed_out, killed)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+             (gist_id, filename, exit_code, stdout, stderr, duration_ms, timed_out, killed, truncated)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 gist_id, filename, exit_code,
                 stdout, stderr, duration_ms,
-                timed_out as i64, killed as i64,
+                timed_out as i64, killed as i64, truncated as i64,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -489,7 +500,7 @@ pub fn list_run_history(gist_id: &str, filename: &str, limit: usize) -> Result<V
     with_db(|conn| {
         let mut stmt = conn.prepare(
             "SELECT id, gist_id, filename, ran_at, exit_code, stdout, stderr,
-                    duration_ms, timed_out, killed
+                    duration_ms, timed_out, killed, truncated
              FROM run_history
              WHERE gist_id=?1 AND filename=?2
              ORDER BY ran_at DESC
@@ -507,6 +518,7 @@ pub fn list_run_history(gist_id: &str, filename: &str, limit: usize) -> Result<V
                 duration_ms: row.get(7)?,
                 timed_out:   row.get::<_, i64>(8)? != 0,
                 killed:      row.get::<_, i64>(9)? != 0,
+                truncated:   row.get::<_, i64>(10)? != 0,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
@@ -533,7 +545,7 @@ pub fn get_run(id: i64) -> Result<RunRecord> {
     with_db(|conn| {
         conn.query_row(
             "SELECT id, gist_id, filename, ran_at, exit_code, stdout, stderr,
-                    duration_ms, timed_out, killed
+                    duration_ms, timed_out, killed, truncated
              FROM run_history WHERE id=?1",
             params![id],
             |row| Ok(RunRecord {
@@ -547,6 +559,7 @@ pub fn get_run(id: i64) -> Result<RunRecord> {
                 duration_ms: row.get(7)?,
                 timed_out:   row.get::<_, i64>(8)? != 0,
                 killed:      row.get::<_, i64>(9)? != 0,
+                truncated:   row.get::<_, i64>(10)? != 0,
             }),
         ).map_err(Into::into)
     })

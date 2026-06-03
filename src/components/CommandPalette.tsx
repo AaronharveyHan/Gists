@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useGistStore } from "../store/useGistStore";
 import { useRecentStore } from "../store/useRecentStore";
 import type { Gist } from "../api/tauri";
+import { useT } from "../store/useI18nStore";
 
 // ── Scoring ────────────────────────────────────────────────────────────────
 
@@ -80,6 +81,7 @@ const ALL_SHOWN = 50;
 export function CommandPalette({ onClose }: { onClose: () => void }) {
   const { gists, selectGist } = useGistStore();
   const recentIds = useRecentStore((s) => s.ids);
+  const t = useT();
 
   const [query, setQuery] = useState("");
   const [activeIdx, setActiveIdx] = useState(0);
@@ -92,7 +94,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
   // ── Build display rows ────────────────────────────────────────────────
 
-  const { rows, totalItems } = buildRows(query, gists, gistMap, validRecentIds);
+  const { rows, totalItems } = buildRows(query, gists, gistMap, validRecentIds, t);
 
   // Reset active index on query change
   useEffect(() => setActiveIdx(0), [query]);
@@ -150,8 +152,8 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
             className="palette__input"
             placeholder={
               validRecentIds.length > 0
-                ? "Jump to gist… (showing recent)"
-                : "Jump to gist…"
+                ? t.palette.placeholderWithRecent
+                : t.palette.placeholder
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -194,7 +196,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                 >
                   <span className="palette__item-file">
                     {item.isRecent && !query && (
-                      <span className="palette__recent-icon" title="Recently visited">↺</span>
+                      <span className="palette__recent-icon" title={t.palette.recentlyVisited}>↺</span>
                     )}
                     <HighlightMatch text={item.primaryFile} query={query} />
                     {item.gist.files.length > 1 && (
@@ -207,7 +209,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                     </span>
                   )}
                   <span className="palette__item-meta">
-                    {item.gist.public ? "public" : "secret"}
+                    {item.gist.public ? t.palette.public : t.palette.secret}
                   </span>
                 </li>
               );
@@ -215,16 +217,16 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
           </ul>
         ) : (
           <p className="palette__empty">
-            {query ? "No matching gists" : "No gists yet"}
+            {query ? t.palette.noMatchingGists : t.palette.noGistsYet}
           </p>
         )}
 
         <div className="palette__footer">
-          <span><kbd>↑↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> open</span>
-          <span><kbd>Esc</kbd> close</span>
+          <span><kbd>↑↓</kbd> {t.palette.footerNavigate}</span>
+          <span><kbd>↵</kbd> {t.palette.footerOpen}</span>
+          <span><kbd>Esc</kbd> {t.palette.footerClose}</span>
           {!query && validRecentIds.length > 0 && (
-            <span className="palette__footer-hint">↺ recently visited</span>
+            <span className="palette__footer-hint">{t.palette.footerRecentHint}</span>
           )}
         </div>
       </div>
@@ -234,11 +236,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
 
 // ── Row builder (pure, outside component) ─────────────────────────────────
 
+import type { Translations } from "../i18n/translations";
+
 function buildRows(
   query: string,
   gists: Gist[],
   gistMap: Map<string, Gist>,
-  recentIds: string[]
+  recentIds: string[],
+  t: Translations,
 ): { rows: DisplayRow[]; totalItems: number } {
   const recentSet = new Set(recentIds);
   let flatIdx = 0;
@@ -252,7 +257,7 @@ function buildRows(
       .filter((g): g is Gist => !!g);
 
     if (recentGists.length > 0) {
-      rows.push({ kind: "section", label: "Recent" });
+      rows.push({ kind: "section", label: t.palette.sectionRecent });
       for (const g of recentGists) {
         rows.push({
           kind: "item",
@@ -273,7 +278,7 @@ function buildRows(
       .slice(0, ALL_SHOWN);
 
     if (rest.length > 0) {
-      rows.push({ kind: "section", label: "All Gists", count: gists.length });
+      rows.push({ kind: "section", label: t.palette.sectionAllGists, count: gists.length });
       for (const g of rest) {
         rows.push({
           kind: "item",
