@@ -1990,6 +1990,7 @@ version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
+ "cc",
  "chrono",
  "dirs 5.0.1",
  "fastembed",

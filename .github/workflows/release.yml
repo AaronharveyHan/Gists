@@ -14,7 +14,7 @@ jobs:
         platform:
           - macos-latest
           - windows-latest
-          - ubuntu-22.04   # Tauri v2 需 WebKitGTK 4.1，22.04 比 24.04 稳
+          - ubuntu-22.04   # glibc 2.35：glibc_compat.c 垫片解决 ort-sys 的 __isoc23_strtol* 符号缺失
 
     runs-on: ${{ matrix.platform }}
 
