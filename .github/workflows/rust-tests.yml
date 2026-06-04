@@ -1,0 +1,44 @@
+name: Rust Unit Tests
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+      - 'main'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    # ubuntu-24.04 ships glibc 2.39, matching the ort-sys prebuilt ONNX Runtime
+    # binary that fastembed downloads (it references glibc 2.38+ symbols).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: '. -> target'
+
+      # Tauri v2 build deps — required because the gists-client bin target links
+      # against WebKitGTK even when only running unit tests.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential
+
+      # Runs every #[cfg(test)] module across the library and the gist CLI crate.
+      - name: Run tests
+        run: cargo test --workspace --locked

@@ -12,7 +12,24 @@ pub fn init_db(app_dir: &str) -> Result<()> {
     let conn = Connection::open(&path)?;
 
     // WAL mode: much faster concurrent reads, non-blocking writes
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+
+    apply_schema(&conn)?;
+
+    DB.set(Mutex::new(conn))
+        .map_err(|_| anyhow::anyhow!("DB already initialized"))?;
+    Ok(())
+}
+
+/// Create every table and run all idempotent migrations on `conn`.
+///
+/// Extracted from [`init_db`] so the migration logic can be exercised against an
+/// in-memory connection in tests without touching the global [`DB`] handle or a
+/// file on disk. Safe to call repeatedly on the same connection — every
+/// statement is `CREATE TABLE IF NOT EXISTS` / additive `ALTER` (errors ignored)
+/// or a version-guarded migration.
+pub(crate) fn apply_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch("PRAGMA foreign_keys=ON;")?;
 
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS gists (
@@ -190,16 +207,27 @@ pub fn init_db(app_dir: &str) -> Result<()> {
     // ── FTS v2 migration ──────────────────────────────────────────────────────
     // Upgrades the contentless FTS5 table to a full-content table with
     // `content_text` (file bodies) and the unicode61 tokenizer (CJK support).
-    migrate_fts_v2(&conn)?;
+    migrate_fts_v2(conn)?;
 
     // ── Wiki-links backfill ─────────────────────────────────────────────────
     // One-time scan of existing gists so backlinks work for content created
     // before this feature shipped. Idempotent: version tracked in `settings`.
-    migrate_links_v1(&conn)?;
+    migrate_links_v1(conn)?;
 
-    DB.set(Mutex::new(conn))
-        .map_err(|_| anyhow::anyhow!("DB already initialized"))?;
     Ok(())
+}
+
+/// Test-only: initialise the global [`DB`] with a shared in-memory database the
+/// first time it is called. Subsequent calls are no-ops, so every test in the
+/// binary safely shares one schema-complete connection (serialised by the
+/// `Mutex`). Tests must use unique ids/keys to avoid interfering with each other.
+#[cfg(test)]
+pub(crate) fn ensure_test_db() {
+    DB.get_or_init(|| {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        apply_schema(&conn).expect("apply schema");
+        Mutex::new(conn)
+    });
 }
 
 // ── FTS migration ─────────────────────────────────────────────────────────────
@@ -563,4 +591,134 @@ pub fn get_run(id: i64) -> Result<RunRecord> {
             }),
         ).map_err(Into::into)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Insert a minimal gists row so run_history's FK constraint is satisfied.
+    fn seed_gist(id: &str) {
+        with_db(|conn| {
+            conn.execute(
+                "INSERT OR IGNORE INTO gists(id, description, created_at, updated_at)
+                 VALUES(?1, '', datetime('now'), datetime('now'))",
+                params![id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn apply_schema_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Running the full schema + migrations twice must not error.
+        apply_schema(&conn).unwrap();
+        apply_schema(&conn).unwrap();
+
+        // Migrations record their version so they never re-run.
+        let fts: String = conn
+            .query_row("SELECT value FROM settings WHERE key='fts_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts, "2");
+        let links: String = conn
+            .query_row("SELECT value FROM settings WHERE key='links_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(links, "1");
+    }
+
+    #[test]
+    fn fts_v2_table_accepts_content_text() {
+        // The v2 migration replaces the original contentless FTS table with a
+        // full-content one; inserting into content_text must succeed.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO gists_fts(gist_id, description, filenames, content_text)
+             VALUES('g1', 'desc', 'a.txt', 'hello world')",
+            [],
+        )
+        .unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gists_fts WHERE gists_fts MATCH 'hello'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn links_v1_backfills_existing_gists() {
+        // Simulate an upgrade: a gist already exists, then the links migration
+        // runs and should extract its [[wiki-link]] references.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('src', 'see [[Target Gist]] for more', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        // Clear the version guard so the migration re-runs over the new row.
+        conn.execute("DELETE FROM settings WHERE key='links_version'", [])
+            .unwrap();
+        migrate_links_v1(&conn).unwrap();
+
+        let link: String = conn
+            .query_row(
+                "SELECT link_text FROM gist_links WHERE source_id='src'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(link, "Target Gist");
+    }
+
+    #[test]
+    fn settings_roundtrip() {
+        ensure_test_db();
+        let key = "test_settings_roundtrip_key";
+        assert_eq!(get_setting(key).unwrap(), None);
+        set_setting(key, "v1").unwrap();
+        assert_eq!(get_setting(key).unwrap().as_deref(), Some("v1"));
+        // Upsert overwrites rather than duplicating.
+        set_setting(key, "v2").unwrap();
+        assert_eq!(get_setting(key).unwrap().as_deref(), Some("v2"));
+    }
+
+    #[test]
+    fn accounts_create_activate_delete() {
+        ensure_test_db();
+        let id = create_account("acct-test-1", Some("octocat"), None).unwrap();
+        set_active_account(id).unwrap();
+
+        let active = get_active_account().unwrap().expect("an active account");
+        assert_eq!(active.id, id);
+        // token_key is derived from the row id after insert.
+        assert_eq!(active.token_key, format!("gists_client_acct_{}", id));
+
+        delete_account(id).unwrap();
+        assert!(list_accounts().unwrap().iter().all(|a| a.id != id));
+    }
+
+    #[test]
+    fn run_history_insert_list_and_prune() {
+        ensure_test_db();
+        let gid = "rh-gist-1";
+        let file = "main.py";
+        seed_gist(gid);
+
+        for i in 0..5 {
+            insert_run(gid, file, i, "out", "err", 10, false, false, false).unwrap();
+        }
+        let rows = list_run_history(gid, file, 10).unwrap();
+        assert_eq!(rows.len(), 5);
+
+        // Keep only the 2 most recent runs for this (gist, file).
+        delete_old_runs(gid, file, 2).unwrap();
+        assert_eq!(list_run_history(gid, file, 10).unwrap().len(), 2);
+    }
 }

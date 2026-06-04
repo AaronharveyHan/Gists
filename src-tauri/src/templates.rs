@@ -150,3 +150,85 @@ pub fn save_gist_as_template(gist_id: &str, name: &str) -> Result<Template> {
     })?;
     create_template(name, &description, is_public, &files)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ensure_test_db, with_db};
+
+    #[test]
+    fn create_fetch_update_delete_cycle() {
+        ensure_test_db();
+
+        let created = create_template(
+            "Test Template",
+            "a description",
+            true,
+            &[
+                ("a.py".to_string(), "print()".to_string()),
+                ("b.txt".to_string(), "hi".to_string()),
+            ],
+        )
+        .unwrap();
+        assert_eq!(created.name, "Test Template");
+        assert!(created.is_public);
+        assert_eq!(created.files.len(), 2);
+        // files come back ordered by sort_order.
+        assert_eq!(created.files[0].filename, "a.py");
+        assert_eq!(created.files[1].filename, "b.txt");
+
+        // Visible in the list.
+        assert!(list_templates().unwrap().iter().any(|t| t.id == created.id));
+
+        // Update replaces metadata and the entire file set.
+        let updated = update_template(
+            created.id,
+            "Renamed",
+            "new desc",
+            false,
+            &[("only.rs".to_string(), "fn main() {}".to_string())],
+        )
+        .unwrap();
+        assert_eq!(updated.name, "Renamed");
+        assert!(!updated.is_public);
+        assert_eq!(updated.files.len(), 1);
+        assert_eq!(updated.files[0].filename, "only.rs");
+
+        // Delete removes it.
+        delete_template(created.id).unwrap();
+        assert!(list_templates().unwrap().iter().all(|t| t.id != created.id));
+    }
+
+    #[test]
+    fn save_gist_as_template_copies_files() {
+        ensure_test_db();
+
+        // Seed a gist with two files.
+        with_db(|conn| {
+            conn.execute(
+                "INSERT INTO gists(id, description, public, created_at, updated_at)
+                 VALUES('sg1', 'Source Gist', 1, '2024-01-01', '2024-01-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO files(gist_id, filename, content) VALUES('sg1', 'one.py', 'x=1')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO files(gist_id, filename, content) VALUES('sg1', 'two.py', 'y=2')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let tmpl = save_gist_as_template("sg1", "From Gist").unwrap();
+        assert_eq!(tmpl.name, "From Gist");
+        assert_eq!(tmpl.description, "Source Gist");
+        assert!(tmpl.is_public);
+        assert_eq!(tmpl.files.len(), 2);
+        let names: Vec<&str> = tmpl.files.iter().map(|f| f.filename.as_str()).collect();
+        assert!(names.contains(&"one.py"));
+        assert!(names.contains(&"two.py"));
+    }
+}

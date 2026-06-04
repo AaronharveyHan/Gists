@@ -226,3 +226,80 @@ pub fn kill_run(run_id: &str) {
 pub const SUPPORTED_EXTS: &[&str] = &[
     "py", "js", "mjs", "cjs", "ts", "sh", "bash", "zsh", "rb", "php", "go",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_runner_maps_known_extensions() {
+        assert_eq!(detect_runner("a.py").unwrap().program, "python3");
+        assert_eq!(detect_runner("a.js").unwrap().program, "node");
+        assert_eq!(detect_runner("a.mjs").unwrap().program, "node");
+        assert_eq!(detect_runner("a.cjs").unwrap().program, "node");
+        assert_eq!(detect_runner("a.sh").unwrap().program, "bash");
+        assert_eq!(detect_runner("a.bash").unwrap().program, "bash");
+        assert_eq!(detect_runner("a.zsh").unwrap().program, "zsh");
+        assert_eq!(detect_runner("a.rb").unwrap().program, "ruby");
+        assert_eq!(detect_runner("a.php").unwrap().program, "php");
+    }
+
+    #[test]
+    fn detect_runner_passes_pre_args() {
+        let go = detect_runner("main.go").unwrap();
+        assert_eq!(go.program, "go");
+        assert_eq!(go.pre_args, vec!["run"]);
+
+        let ts = detect_runner("main.ts").unwrap();
+        assert_eq!(ts.program, "npx");
+        assert_eq!(ts.pre_args, vec!["--yes", "ts-node", "--transpile-only"]);
+    }
+
+    #[test]
+    fn detect_runner_is_case_insensitive() {
+        assert_eq!(detect_runner("SCRIPT.PY").unwrap().program, "python3");
+    }
+
+    #[test]
+    fn detect_runner_rejects_unknown_and_extensionless() {
+        assert!(detect_runner("a.rs").is_none());
+        assert!(detect_runner("README").is_none());
+    }
+
+    #[test]
+    fn clip_to_leaves_short_strings_untouched() {
+        let mut s = "hello".to_string();
+        assert!(!clip_to(&mut s, 100));
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn clip_to_truncates_and_marks() {
+        let mut s = "a".repeat(200);
+        assert!(clip_to(&mut s, 50));
+        assert!(s.starts_with(&"a".repeat(50)));
+        assert!(s.ends_with("…[truncated]"));
+    }
+
+    #[test]
+    fn clip_to_respects_utf8_boundaries() {
+        // Each "你" is 3 bytes; cutting at 4 bytes would split a codepoint.
+        let mut s = "你你你你".to_string(); // 12 bytes
+        let clipped = clip_to(&mut s, 4);
+        assert!(clipped);
+        // Truncation must snap back to a char boundary (3 bytes → one "你").
+        assert!(s.starts_with("你"));
+        assert!(s.ends_with("…[truncated]"));
+    }
+
+    #[test]
+    fn supported_exts_align_with_detect_runner() {
+        for ext in SUPPORTED_EXTS {
+            let name = format!("file.{ext}");
+            assert!(
+                detect_runner(&name).is_some(),
+                "SUPPORTED_EXTS lists '{ext}' but detect_runner has no mapping"
+            );
+        }
+    }
+}

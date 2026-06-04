@@ -258,3 +258,58 @@ pub fn load_token() -> Option<String> {
             .and_then(|raw| decrypt_from_db(&raw))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_roundtrip() {
+        let bytes = [0x00, 0x0f, 0x10, 0xff, 0xab, 0x42];
+        let hex = to_hex(&bytes);
+        assert_eq!(hex, "000f10ffab42");
+        assert_eq!(from_hex(&hex).unwrap(), bytes);
+    }
+
+    #[test]
+    fn from_hex_rejects_malformed() {
+        assert!(from_hex("abc").is_none()); // odd length
+        assert!(from_hex("zz").is_none()); // non-hex digits
+    }
+
+    #[test]
+    fn decrypt_passes_through_legacy_plaintext() {
+        // Values without the enc:v1: prefix are pre-encryption tokens and are
+        // returned unchanged so existing users keep working after upgrade.
+        assert_eq!(
+            decrypt_from_db("ghp_legacyToken").as_deref(),
+            Some("ghp_legacyToken")
+        );
+    }
+
+    #[test]
+    fn decrypt_handles_empty_and_malformed_ciphertext() {
+        assert_eq!(decrypt_from_db(""), None);
+        // Prefixed but the hex payload is too short to hold a nonce + ciphertext.
+        assert_eq!(decrypt_from_db("enc:v1:00"), None);
+        // Prefixed but the payload is not valid hex.
+        assert_eq!(decrypt_from_db("enc:v1:zzzz"), None);
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        // Exercises the AES-256-GCM path end to end. This creates/uses a
+        // vault.key under the app data dir on this machine — harmless and
+        // required to validate that ciphertext decrypts back to plaintext.
+        let plaintext = "ghp_secret_token_value_123";
+        let Ok(encoded) = encrypt_for_db(plaintext) else {
+            // No resolvable app data dir in this environment — skip rather than
+            // fail (the encrypt path is environment-dependent, decrypt logic is
+            // covered by the cases above).
+            return;
+        };
+        assert!(encoded.starts_with("enc:v1:"));
+        assert_ne!(encoded, plaintext);
+        assert_eq!(decrypt_from_db(&encoded).as_deref(), Some(plaintext));
+    }
+}

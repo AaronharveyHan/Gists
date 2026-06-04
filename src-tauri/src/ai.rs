@@ -15,6 +15,19 @@ struct ChatRequest<'a> {
     stream: bool,
 }
 
+/// Parse one OpenAI-compatible SSE `data:` payload and return the text delta,
+/// if any. Returns `None` for unparseable JSON or an empty/absent content field
+/// so the caller can simply skip it. The `[DONE]` sentinel is handled upstream.
+fn extract_sse_delta(data: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(data).ok()?;
+    let content = json["choices"][0]["delta"]["content"].as_str()?;
+    if content.is_empty() {
+        None
+    } else {
+        Some(content.to_string())
+    }
+}
+
 /// Stream a chat completion to the frontend via Tauri window events.
 /// Emits `ai-chunk-{stream_id}` for each text delta,
 /// then `ai-done-{stream_id}` when complete (or on error).
@@ -69,15 +82,9 @@ pub async fn stream_chat(
                         if data == "[DONE]" {
                             break 'outer;
                         }
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(content) =
-                                json["choices"][0]["delta"]["content"].as_str()
-                            {
-                                if !content.is_empty() {
-                                    let _ = window
-                                        .emit(&format!("ai-chunk-{}", stream_id), content);
-                                }
-                            }
+                        if let Some(content) = extract_sse_delta(data) {
+                            let _ = window
+                                .emit(&format!("ai-chunk-{}", stream_id), content);
                         }
                     }
                 }
@@ -123,4 +130,34 @@ pub async fn complete(
         .as_str()
         .unwrap_or_default()
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_content_delta() {
+        let data = r#"{"choices":[{"delta":{"content":"Hello"}}]}"#;
+        assert_eq!(extract_sse_delta(data).as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn skips_empty_delta() {
+        let data = r#"{"choices":[{"delta":{"content":""}}]}"#;
+        assert_eq!(extract_sse_delta(data), None);
+    }
+
+    #[test]
+    fn skips_delta_without_content() {
+        // Role-only opening chunk has no content field.
+        let data = r#"{"choices":[{"delta":{"role":"assistant"}}]}"#;
+        assert_eq!(extract_sse_delta(data), None);
+    }
+
+    #[test]
+    fn skips_unparseable_json() {
+        assert_eq!(extract_sse_delta("not json"), None);
+        assert_eq!(extract_sse_delta(""), None);
+    }
 }

@@ -228,3 +228,93 @@ pub struct Account {
     pub token_key: String,
     pub is_active: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_gist_converts_to_domain_gist() {
+        let json = r#"{
+            "id": "abc123",
+            "description": "a gist",
+            "public": true,
+            "html_url": "https://gist.github.com/abc123",
+            "created_at": "2024-01-01T00:00:00Z",
+            "updated_at": "2024-01-02T00:00:00Z",
+            "files": {
+                "main.py": {
+                    "filename": "main.py",
+                    "language": "Python",
+                    "content": "print(1)",
+                    "size": 8,
+                    "raw_url": "https://example.com/main.py"
+                }
+            }
+        }"#;
+        let gh: GitHubGist = serde_json::from_str(json).unwrap();
+        let g: Gist = gh.into();
+
+        assert_eq!(g.id, "abc123");
+        assert_eq!(g.description, "a gist");
+        assert!(g.public);
+        assert_eq!(g.files.len(), 1);
+        assert_eq!(g.files[0].filename, "main.py");
+        assert_eq!(g.files[0].language.as_deref(), Some("Python"));
+        // Conversion defaults the local-only fields.
+        assert!(!g.pending_push);
+        assert!(!g.local_only);
+        assert_eq!(g.category, "gist");
+        assert_eq!(g.lang_group, "other");
+    }
+
+    #[test]
+    fn github_gist_tolerates_missing_optional_fields() {
+        // description/content/size/raw_url absent → safe defaults.
+        let json = r#"{
+            "id": "x",
+            "public": false,
+            "html_url": "u",
+            "created_at": "c",
+            "updated_at": "d",
+            "files": { "f": { "filename": "f" } }
+        }"#;
+        let gh: GitHubGist = serde_json::from_str(json).unwrap();
+        let g: Gist = gh.into();
+        assert_eq!(g.description, "");
+        assert_eq!(g.files[0].content, "");
+        assert_eq!(g.files[0].size, 0);
+        assert_eq!(g.files[0].raw_url, None);
+    }
+
+    #[test]
+    fn gist_deserialize_applies_serde_defaults() {
+        // A persisted Gist missing the newer fields should still deserialize.
+        let json = r#"{
+            "id": "g",
+            "description": "",
+            "public": false,
+            "html_url": "",
+            "created_at": "c",
+            "updated_at": "u",
+            "files": []
+        }"#;
+        let g: Gist = serde_json::from_str(json).unwrap();
+        assert!(!g.pending_push);
+        assert_eq!(g.category, "gist");
+        assert_eq!(g.lang_group, "other");
+        assert!(!g.pinned);
+        assert!(!g.local_only);
+    }
+
+    #[test]
+    fn update_gist_file_omits_none_filename() {
+        // skip_serializing_if must drop `filename` when it is None (= no rename).
+        let f = UpdateGistFile { content: "x".into(), filename: None };
+        let json = serde_json::to_string(&f).unwrap();
+        assert!(!json.contains("filename"));
+
+        let f2 = UpdateGistFile { content: "x".into(), filename: Some("new.rs".into()) };
+        assert!(serde_json::to_string(&f2).unwrap().contains("new.rs"));
+    }
+}

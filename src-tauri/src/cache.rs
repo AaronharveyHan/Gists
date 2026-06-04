@@ -1431,3 +1431,177 @@ pub fn get_gist_collections(gist_id: &str) -> Result<Vec<Collection>> {
         .map_err(Into::into)
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh, schema-complete, in-memory database for connection-level tests.
+    fn mem_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::apply_schema(&conn).unwrap();
+        conn
+    }
+
+    fn insert_gist(conn: &Connection, id: &str, description: &str) {
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES(?1, ?2, '2024-01-01', '2024-01-01')",
+            params![id, description],
+        )
+        .unwrap();
+    }
+
+    // ── extract_wiki_links (pure) ──────────────────────────────────────────
+
+    #[test]
+    fn extract_wiki_links_basic_and_order() {
+        assert_eq!(
+            extract_wiki_links("see [[Alpha]] then [[Beta]]"),
+            vec!["Alpha".to_string(), "Beta".to_string()]
+        );
+    }
+
+    #[test]
+    fn extract_wiki_links_trims_and_skips_empty() {
+        assert_eq!(extract_wiki_links("[[  Spaced  ]]"), vec!["Spaced".to_string()]);
+        assert!(extract_wiki_links("[[]]").is_empty());
+        assert!(extract_wiki_links("[[   ]]").is_empty());
+    }
+
+    #[test]
+    fn extract_wiki_links_rejects_newline_and_unclosed() {
+        assert!(extract_wiki_links("[[multi\nline]]").is_empty());
+        assert!(extract_wiki_links("[[unclosed").is_empty());
+        assert!(extract_wiki_links("no links here").is_empty());
+    }
+
+    #[test]
+    fn extract_wiki_links_skips_overlong_target() {
+        let long = "x".repeat(201);
+        assert!(extract_wiki_links(&format!("[[{long}]]")).is_empty());
+    }
+
+    // ── reindex_links (DB) ─────────────────────────────────────────────────
+
+    #[test]
+    fn reindex_links_dedupes_case_insensitively() {
+        let conn = mem_db();
+        insert_gist(&conn, "src", "");
+        reindex_links(&conn, "src", "[[Foo]] and [[foo]] and [[Bar]]", &["[[Bar]] again"]).unwrap();
+
+        let mut links: Vec<String> = conn
+            .prepare("SELECT link_text FROM gist_links WHERE source_id='src'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        links.sort();
+        // "foo" is deduped against "Foo"; "Bar" appears in both desc and content.
+        assert_eq!(links, vec!["Bar".to_string(), "Foo".to_string()]);
+    }
+
+    #[test]
+    fn reindex_links_replaces_previous_set() {
+        let conn = mem_db();
+        insert_gist(&conn, "src", "");
+        reindex_links(&conn, "src", "[[Old]]", &[]).unwrap();
+        reindex_links(&conn, "src", "[[New]]", &[]).unwrap();
+
+        let links: Vec<String> = conn
+            .prepare("SELECT link_text FROM gist_links WHERE source_id='src'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(links, vec!["New".to_string()]);
+    }
+
+    // ── resolve_wiki_id (DB) ───────────────────────────────────────────────
+
+    #[test]
+    fn resolve_wiki_id_cascade() {
+        let conn = mem_db();
+        insert_gist(&conn, "g1", "My Awesome Gist");
+        insert_gist(&conn, "g2", "Unrelated");
+        conn.execute(
+            "INSERT INTO files(gist_id, filename, content) VALUES('g1', 'helper.py', '')",
+            [],
+        )
+        .unwrap();
+
+        // 1. exact description match
+        assert_eq!(resolve_wiki_id(&conn, "my awesome gist").unwrap().as_deref(), Some("g1"));
+        // 1. exact filename match
+        assert_eq!(resolve_wiki_id(&conn, "helper.py").unwrap().as_deref(), Some("g1"));
+        // 2. description starts-with
+        assert_eq!(resolve_wiki_id(&conn, "my awesome").unwrap().as_deref(), Some("g1"));
+        // no match
+        assert_eq!(resolve_wiki_id(&conn, "definitely not present").unwrap(), None);
+        // empty input short-circuits
+        assert_eq!(resolve_wiki_id(&conn, "").unwrap(), None);
+    }
+
+    // ── upsert_gist_replace_all (DB) ───────────────────────────────────────
+
+    #[test]
+    fn upsert_gist_populates_files_fts_and_links() {
+        let conn = mem_db();
+        let gist = Gist {
+            id: "u1".into(),
+            description: "Doc referencing [[Other]]".into(),
+            public: true,
+            html_url: "https://example.com".into(),
+            created_at: "2024-01-01".into(),
+            updated_at: "2024-01-02".into(),
+            files: vec![GistFile {
+                filename: "main.py".into(),
+                language: Some("Python".into()),
+                content: "print('searchable token')".into(),
+                size: 10,
+                raw_url: None,
+            }],
+            pending_push: false,
+            category: "gist".into(),
+            lang_group: "other".into(),
+            pinned: false,
+            local_only: false,
+        };
+
+        upsert_gist_replace_all(&conn, &gist).unwrap();
+
+        // gists + files rows present
+        let file_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE gist_id='u1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(file_count, 1);
+
+        // FTS indexed the file content
+        let fts_hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gists_fts WHERE gists_fts MATCH 'searchable'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_hits, 1);
+
+        // wiki-link extracted from the description
+        let link: String = conn
+            .query_row("SELECT link_text FROM gist_links WHERE source_id='u1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(link, "Other");
+
+        // remote snapshot baseline saved
+        let snap: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files_remote_snapshot WHERE gist_id='u1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(snap, 1);
+    }
+}

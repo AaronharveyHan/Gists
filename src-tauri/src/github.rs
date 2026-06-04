@@ -35,12 +35,33 @@ fn build_client(token: &str) -> Result<Client> {
         .build()?)
 }
 
+/// Strip the surrounding quotes GitHub wraps ETag values in.
+fn strip_etag_quotes(raw: &str) -> String {
+    raw.trim_matches('"').to_string()
+}
+
 /// Extract the ETag value from a response (strips surrounding quotes).
 fn extract_etag(resp: &reqwest::Response) -> Option<String> {
     resp.headers()
         .get("etag")
         .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim_matches('"').to_string())
+        .map(strip_etag_quotes)
+}
+
+/// First 8 characters of a commit SHA (or the whole SHA if shorter).
+fn short_sha(sha: &str) -> String {
+    sha[..8.min(sha.len())].to_string()
+}
+
+/// How long to sleep when the rate limit is exhausted, given the
+/// `X-RateLimit-Reset` epoch second (if any) and the current epoch second.
+/// Falls back to 60s when reset is missing or already in the past, and is
+/// capped at 5 minutes so a bogus reset value can't stall the app.
+fn backoff_wait_secs(reset: Option<u64>, now: u64) -> u64 {
+    reset
+        .and_then(|reset| reset.checked_sub(now).map(|d| d + 1))
+        .unwrap_or(60)
+        .min(300)
 }
 
 // ── Rate limit helpers ────────────────────────────────────────────────────────
@@ -62,20 +83,16 @@ async fn backoff_if_rate_limited(resp: &reqwest::Response) {
     };
 
     if remaining == 0 {
-        let wait_secs = resp
+        let reset = resp
             .headers()
             .get("X-RateLimit-Reset")
             .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse::<u64>().ok())
-            .and_then(|reset| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_secs();
-                reset.checked_sub(now).map(|d| d + 1)
-            })
-            .unwrap_or(60)
-            .min(300); // cap at 5 minutes
+            .and_then(|s| s.parse::<u64>().ok());
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let wait_secs = backoff_wait_secs(reset, now);
         eprintln!("[gists-client] GitHub rate limit exhausted — waiting {wait_secs}s");
         tokio::time::sleep(tokio::time::Duration::from_secs(wait_secs)).await;
     } else if remaining < 10 {
@@ -233,7 +250,7 @@ pub async fn fetch_gist_commits(
         .into_iter()
         .map(|c| {
             let sha = c.version;
-            let short_sha = sha[..8.min(sha.len())].to_string();
+            let short_sha = short_sha(&sha);
             GistRevisionView {
                 short_sha,
                 sha,
@@ -336,4 +353,58 @@ pub async fn get_user_profile(token: &str) -> Result<(String, Option<String>)> {
     let login = json["login"].as_str().unwrap_or("").to_string();
     let avatar = json["avatar_url"].as_str().map(|s| s.to_string());
     Ok((login, avatar))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_etag_quotes_unwraps_value() {
+        assert_eq!(strip_etag_quotes("\"abc123\""), "abc123");
+        assert_eq!(strip_etag_quotes("noquotes"), "noquotes");
+    }
+
+    #[test]
+    fn short_sha_truncates_to_eight() {
+        assert_eq!(short_sha("0123456789abcdef"), "01234567");
+    }
+
+    #[test]
+    fn short_sha_handles_short_input() {
+        assert_eq!(short_sha("abc"), "abc");
+        assert_eq!(short_sha(""), "");
+    }
+
+    #[test]
+    fn backoff_uses_reset_plus_one_second() {
+        // reset 40s in the future → wait 41s.
+        assert_eq!(backoff_wait_secs(Some(140), 100), 41);
+    }
+
+    #[test]
+    fn backoff_caps_at_five_minutes() {
+        // A reset far in the future is clamped to 300s.
+        assert_eq!(backoff_wait_secs(Some(1_000_000), 0), 300);
+    }
+
+    #[test]
+    fn backoff_falls_back_when_missing_or_past() {
+        assert_eq!(backoff_wait_secs(None, 100), 60);
+        // reset already elapsed → checked_sub yields None → default 60.
+        assert_eq!(backoff_wait_secs(Some(50), 100), 60);
+    }
+
+    #[test]
+    fn github_gist_list_parses_pagination_batch() {
+        // The sync loop deserializes each page as Vec<GitHubGist>; verify the
+        // shape parses and that a short page (< PER_PAGE) signals the last page.
+        let json = r#"[
+            {"id":"1","public":true,"html_url":"u","created_at":"c","updated_at":"u","files":{}},
+            {"id":"2","public":false,"html_url":"u","created_at":"c","updated_at":"u","files":{}}
+        ]"#;
+        let batch: Vec<GitHubGist> = serde_json::from_str(json).unwrap();
+        assert_eq!(batch.len(), 2);
+        assert!((batch.len() as u32) < PER_PAGE); // would terminate pagination
+    }
 }

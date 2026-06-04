@@ -113,3 +113,73 @@ pub async fn generate_embedding(
         .map(|d| d.embedding)
         .ok_or_else(|| anyhow::anyhow!("Empty embedding response"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vec_bytes_roundtrip() {
+        let v = vec![0.0_f32, 1.5, -2.25, 3.125, f32::MIN, f32::MAX];
+        let bytes = vec_to_bytes(&v);
+        assert_eq!(bytes.len(), v.len() * 4);
+        assert_eq!(bytes_to_vec(&bytes), v);
+    }
+
+    #[test]
+    fn bytes_to_vec_ignores_trailing_partial_chunk() {
+        // 6 bytes = one full f32 + 2 stray bytes; the remainder is dropped.
+        let bytes = [0u8, 0, 128, 63, 1, 2]; // first 4 bytes == 1.0_f32
+        assert_eq!(bytes_to_vec(&bytes), vec![1.0_f32]);
+    }
+
+    #[test]
+    fn cosine_identical_is_one() {
+        let a = vec![1.0, 2.0, 3.0];
+        assert!((cosine_similarity(&a, &a) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_orthogonal_is_zero() {
+        assert!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_opposite_is_negative_one() {
+        assert!((cosine_similarity(&[1.0, 0.0], &[-1.0, 0.0]) + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn cosine_zero_vector_is_zero() {
+        // Guards the divide-by-zero branch.
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 2.0]), 0.0);
+    }
+
+    #[test]
+    fn build_embed_text_includes_desc_and_files() {
+        let files = vec![
+            ("a.py".to_string(), "print(1)".to_string()),
+            ("b.txt".to_string(), "hello".to_string()),
+        ];
+        let out = build_embed_text("my desc", &files);
+        assert!(out.starts_with("my desc\n"));
+        assert!(out.contains("Files: a.py, b.txt"));
+        assert!(out.contains("print(1)"));
+        assert!(out.contains("hello"));
+    }
+
+    #[test]
+    fn build_embed_text_truncates_large_content() {
+        let big = "x".repeat(10_000);
+        let files = vec![("big.txt".to_string(), big)];
+        let out = build_embed_text("", &files);
+        // Hard cap is ~6000 chars plus the truncation marker.
+        assert!(out.len() <= 6000 + "\n[truncated]".len());
+        assert!(out.contains("[truncated]"));
+    }
+
+    #[test]
+    fn build_embed_text_empty_inputs() {
+        assert_eq!(build_embed_text("", &[]), "");
+    }
+}

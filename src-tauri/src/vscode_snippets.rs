@@ -265,3 +265,105 @@ fn strip_jsonc_comments(src: &str) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Write `content` to a file named exactly `name` inside a uniquely-named
+    /// temp directory, preserving the filename stem (which `parse_file` reads as
+    /// a language hint). Caller is responsible for cleanup.
+    fn temp_file(name: &str, content: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gists-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn lang_to_ext_known_and_unknown() {
+        assert_eq!(lang_to_ext("python"), "py");
+        assert_eq!(lang_to_ext("TypeScript"), "ts"); // case-insensitive
+        assert_eq!(lang_to_ext("typescriptreact"), "ts");
+        assert_eq!(lang_to_ext("c++"), "cpp");
+        assert_eq!(lang_to_ext("dockerfile"), "Dockerfile");
+        assert_eq!(lang_to_ext("totally-unknown"), "txt");
+    }
+
+    #[test]
+    fn strip_jsonc_line_and_block_comments() {
+        let src = "{\n  // a line comment\n  \"a\": 1, /* block */ \"b\": 2\n}";
+        let cleaned = strip_jsonc_comments(src);
+        assert!(!cleaned.contains("line comment"));
+        assert!(!cleaned.contains("block"));
+        let json: Value = serde_json::from_str(&cleaned).unwrap();
+        assert_eq!(json["a"], 1);
+        assert_eq!(json["b"], 2);
+    }
+
+    #[test]
+    fn strip_jsonc_preserves_slashes_in_strings() {
+        let src = r#"{"url": "http://example.com/path"}"#;
+        let cleaned = strip_jsonc_comments(src);
+        assert!(cleaned.contains("http://example.com/path"));
+    }
+
+    #[test]
+    fn parse_file_array_body_and_scope_language() {
+        let json = r#"{
+            "Log": {
+                "scope": "javascript,typescript",
+                "prefix": "log",
+                "body": ["console.log('$1');", "$2"],
+                "description": "Log to console"
+            }
+        }"#;
+        let path = temp_file("snippets.code-snippets", json);
+        let out = parse_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(out.len(), 1);
+        let s = &out[0];
+        assert_eq!(s.name, "Log");
+        assert_eq!(s.description, "Log to console");
+        assert_eq!(s.prefix, "log");
+        assert_eq!(s.language, "javascript"); // first scope wins
+        assert_eq!(s.filename, "snippet.js");
+        assert_eq!(s.body, "console.log('$1');\n$2"); // joined with \n
+    }
+
+    #[test]
+    fn parse_file_infers_language_from_filename_stem() {
+        // No scope → language taken from the `python.json` filename stem.
+        let json = r#"{ "Hi": { "prefix": "hi", "body": "print('hi')" } }"#;
+        let path = temp_file("python.json", json);
+        let out = parse_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].language, "python");
+        assert_eq!(out[0].filename, "snippet.py");
+        // description falls back to "Prefix: <prefix>" when absent.
+        assert_eq!(out[0].description, "Prefix: hi");
+        assert_eq!(out[0].body, "print('hi')");
+    }
+
+    #[test]
+    fn parse_file_skips_entries_without_body() {
+        let json = r#"{ "NoBody": { "prefix": "x" }, "Good": { "body": "ok" } }"#;
+        let path = temp_file("misc.json", json);
+        let out = parse_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].name, "Good");
+    }
+}
