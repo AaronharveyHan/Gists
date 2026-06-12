@@ -20,12 +20,12 @@ jobs:
 
     steps:
       # 1. 拉取代码
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # 2. 安装 Node.js
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       # 3. 安装 Rust stable

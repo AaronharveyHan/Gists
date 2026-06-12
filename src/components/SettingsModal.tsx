@@ -6,7 +6,7 @@ import {
   localEmbeddingStatus, downloadLocalEmbeddingModel,
   type LocalEmbeddingStatus,
 } from "../api/tauri";
-import { useT, useI18nStore } from "../store/useI18nStore";
+import { useT, useI18nStore, getT } from "../store/useI18nStore";
 import { AI_PROVIDERS, detectProvider } from "../data/aiProviders";
 import { initErrorReporting } from "../lib/errorReporting";
 import { listAccounts, addAccount, removeAccount, switchAccount, type Account } from "../api/tauri";
@@ -139,7 +139,9 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       setAiProviderId(detectProvider(cfg.base_url).id);
     }).catch((e) => {
       console.error("[settings] load AI config failed:", e);
-      notify(t.settings.loadConfigError, "error");
+      // getT(): mount-only effect — the reactive `t` would force a reload on
+      // language change just to keep this toast string fresh.
+      notify(getT().settings.loadConfigError, "error");
     });
   }, []);
 

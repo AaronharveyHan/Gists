@@ -478,6 +478,9 @@ function GistList({
   searchQuery, searchMode, semanticError, semanticBusy, semanticGists,
   semanticScoreMap, t,
 }: GistListProps) {
+  // False positive: eslint-plugin-react-hooks 7.x flags @tanstack/react-virtual,
+  // which is hook-safe.
+  // eslint-disable-next-line react-hooks/incompatible-library
   const virtualizer = useVirtualizer({
     count: filteredGists.length,
     getScrollElement: () => listRef.current,
