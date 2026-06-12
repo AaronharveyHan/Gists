@@ -142,8 +142,12 @@ export function applyTheme(presetId: string, accentOverride: string | null) {
 
 export function resolveMonacoTheme(presetId: string): "vs-dark" | "vs" {
   const preset = PRESETS[presetId];
-  return preset?.vars?.monacoTheme ??
-    (window.matchMedia("(prefers-color-scheme: dark)").matches ? "vs-dark" : "vs");
+  if (preset?.vars?.monacoTheme) return preset.vars.monacoTheme;
+  // Guard for non-browser contexts (node test environment without jsdom).
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "vs-dark";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "vs-dark" : "vs";
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
