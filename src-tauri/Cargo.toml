@@ -41,5 +41,8 @@ fastembed = { version = "5.15.0", default-features = false, features = ["hf-hub-
 [target.'cfg(debug_assertions)'.dependencies]
 tauri-plugin-wdio-webdriver = "1"
 
+[dev-dependencies]
+wiremock = "0.6"
+
 [features]
 custom-protocol = ["tauri/custom-protocol"]

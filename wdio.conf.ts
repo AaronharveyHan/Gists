@@ -44,6 +44,11 @@ function isolationEnv(): Record<string, string> {
   if (process.platform === "linux") {
     env.XDG_DATA_HOME = path.join(e2eTmpDir, "data");
     env.XDG_CONFIG_HOME = path.join(e2eTmpDir, "config");
+    // WebKitGTK's DMABUF renderer crashes the WebKitWebProcess on GPU-less
+    // CI runners; a dead web process means the embedded WebDriver server
+    // never starts listening on its port and the session times out.
+    env.WEBKIT_DISABLE_DMABUF_RENDERER = "1";
+    env.WEBKIT_DISABLE_COMPOSITING_MODE = "1";
   } else if (process.platform === "darwin") {
     env.HOME = e2eTmpDir;
   } else if (process.platform === "win32") {
@@ -101,12 +106,21 @@ export const config = {
         // Embedded mode manages its own WebDriver server (tauri-plugin-wdio-webdriver);
         // no external tauri-driver needed on any platform.
         autoInstallTauriDriver: false,
+        // CI runners (cold Rust cache, software rendering) can need well over
+        // the 60s default for the app + embedded server to come up.
+        startTimeout: 120000,
+        // Write the app's stdout/stderr to outputDir so CI can upload them as
+        // artifacts — without this a startup crash leaves no trace.
+        captureBackendLogs: true,
+        captureFrontendLogs: true,
         // Point directly to the bundled msedgedriver when found (Windows only).
         ...(windowsDriver ? { tauriDriverPath: windowsDriver } : {}),
         env: isolationEnv(),
       },
     ],
   ],
+
+  outputDir: "logs",
 
   framework: "mocha",
 
