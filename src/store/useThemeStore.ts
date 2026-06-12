@@ -143,11 +143,10 @@ export function applyTheme(presetId: string, accentOverride: string | null) {
 export function resolveMonacoTheme(presetId: string): "vs-dark" | "vs" {
   const preset = PRESETS[presetId];
   if (preset?.vars?.monacoTheme) return preset.vars.monacoTheme;
-  // Guard for non-browser contexts (node test environment without jsdom).
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return "vs-dark";
-  }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "vs-dark" : "vs";
+  // window.matchMedia is absent in some test environments (jsdom without the
+  // setup mock).  Use optional chaining so the absence degrades to "vs" rather
+  // than throwing.
+  return window?.matchMedia?.("(prefers-color-scheme: dark)")?.matches ? "vs-dark" : "vs";
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────

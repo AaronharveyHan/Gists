@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, cleanup } from "@testing-library/react";
 import { useAutoSync } from "./useAutoSync";
 import { useGistStore } from "../store/useGistStore";
 import { useThemeStore } from "../store/useThemeStore";
@@ -23,6 +23,10 @@ describe("useAutoSync", () => {
   });
 
   afterEach(() => {
+    // Unmount all hooks rendered in this test so their setInterval callbacks
+    // don't survive into the next test and inflate call counts.
+    cleanup();
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
