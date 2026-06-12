@@ -27,11 +27,13 @@ impl ParsedQuery {
 ///
 /// # Examples
 /// ```
+/// use gists_client::search_parser::parse;
+///
 /// let q = parse("tag:rust lang:python is:public async");
-/// // q.tags      == ["rust"]
-/// // q.langs     == ["python"]
-/// // q.is_public == Some(true)
-/// // q.keywords  == ["async"]
+/// assert_eq!(q.tags, ["rust"]);
+/// assert_eq!(q.langs, ["python"]);
+/// assert_eq!(q.is_public, Some(true));
+/// assert_eq!(q.keywords, ["async"]);
 /// ```
 pub fn parse(input: &str) -> ParsedQuery {
     let mut pq = ParsedQuery::default();

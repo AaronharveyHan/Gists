@@ -482,6 +482,7 @@ mod tests {
             category: "gist".into(),
             lang_group: "other".into(),
             pinned: false,
+            local_only: false,
         }
     }
 
@@ -498,6 +499,7 @@ mod tests {
             category: "gist".into(),
             lang_group: "other".into(),
             pinned: false,
+            local_only: false,
         }
     }
 
@@ -647,6 +649,7 @@ mod tests {
             category: "gist".into(),
             lang_group: "other".into(),
             pinned: false,
+            local_only: false,
         };
         assert_eq!(classify(&g), ("gist", "other"));
     }
@@ -682,6 +685,7 @@ mod tests {
             category: "gist".into(),
             lang_group: "other".into(),
             pinned: false,
+            local_only: false,
         }
     }
 
