@@ -22,6 +22,7 @@ use gists_client::auth::{
     keyring_delete, keyring_delete_for,
     keyring_get_for,
     keyring_set_checked, keyring_set_for_checked,
+    validate_token_format,
 };
 pub use gists_client::auth::keyring_get;
 
@@ -39,20 +40,7 @@ pub async fn set_token(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     // Fast local check — avoids wasting an API call on clearly invalid input.
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Err("Token cannot be empty".into());
-    }
-    let known_prefix = token.starts_with("ghp_")
-        || token.starts_with("ghu_")
-        || token.starts_with("gho_")
-        || token.starts_with("ghs_")
-        || token.starts_with("github_pat_");
-    if !known_prefix || token.len() < 20 {
-        return Err(
-            "Invalid token format — expected ghp_…, ghu_…, gho_…, or github_pat_…".into(),
-        );
-    }
+    let token = validate_token_format(&token)?;
 
     let login = github::validate_token(&token)
         .await
@@ -374,18 +362,7 @@ pub async fn add_account(
     token: String,
     state: State<'_, AppState>,
 ) -> Result<gists_client::models::Account, String> {
-    let token = token.trim().to_string();
-    if token.is_empty() {
-        return Err("Token cannot be empty".into());
-    }
-    let known_prefix = token.starts_with("ghp_")
-        || token.starts_with("ghu_")
-        || token.starts_with("gho_")
-        || token.starts_with("ghs_")
-        || token.starts_with("github_pat_");
-    if !known_prefix || token.len() < 20 {
-        return Err("Invalid token format".into());
-    }
+    let token = validate_token_format(&token)?;
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("Account name cannot be empty".into());
@@ -484,52 +461,11 @@ pub fn merge_gist_conflict(
     local_files: Vec<(String, String)>,
     remote_files: Vec<(String, String)>,
 ) -> Result<gists_client::models::MergeOutcome, String> {
-    use gists_client::diff::three_way_merge;
-    use gists_client::models::{MergedFile, MergeOutcome};
-    use std::collections::HashMap;
-
     let base = gists_client::cache::get_remote_snapshot(&gist_id)
         .map_err(|e| e.to_string())?;
-
     let local_map: HashMap<String, String> = local_files.into_iter().collect();
     let remote_map: HashMap<String, String> = remote_files.into_iter().collect();
-
-    // Union of all filenames across base, local, remote.
-    let mut all_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    all_names.extend(base.keys().cloned());
-    all_names.extend(local_map.keys().cloned());
-    all_names.extend(remote_map.keys().cloned());
-
-    let mut files: Vec<MergedFile> = Vec::new();
-    let mut any_conflict = false;
-
-    for name in all_names {
-        let b = base.get(&name).map(|s| s.as_str()).unwrap_or("");
-        let l = local_map.get(&name).map(|s| s.as_str());
-        let r = remote_map.get(&name).map(|s| s.as_str());
-
-        let (content, had_conflict) = match (l, r) {
-            (Some(lc), Some(rc)) => {
-                let result = three_way_merge(b, lc, rc);
-                (result.content, result.had_conflict)
-            }
-            // File only in local — keep it (new local file).
-            (Some(lc), None) if b.is_empty() => (lc.to_string(), false),
-            // Remote deleted, local still has it — keep local, flag conflict.
-            (Some(lc), None) => (lc.to_string(), true),
-            // Only in remote — take it.
-            (None, Some(rc)) => (rc.to_string(), false),
-            // Only in base (deleted by both?) — omit.
-            (None, None) => continue,
-        };
-
-        if had_conflict {
-            any_conflict = true;
-        }
-        files.push(MergedFile { filename: name, content, had_conflict });
-    }
-
-    Ok(MergeOutcome { files, any_conflict })
+    Ok(gists_client::diff::merge_file_sets(&base, &local_map, &remote_map))
 }
 
 // ── Diff commands ─────────────────────────────────────────────────────────────
@@ -589,35 +525,7 @@ pub async fn fetch_rev_diff(
         _ => HashMap::new(),
     };
 
-    let mut parts: Vec<String> = Vec::new();
-
-    // Modified + new files (present in this revision).
-    let mut cur_files = gist.files;
-    cur_files.sort_unstable_by(|a, b| a.filename.cmp(&b.filename));
-    for f in &cur_files {
-        let prev_content = prev_files.get(&f.filename).map(|s| s.as_str()).unwrap_or("");
-        let chunk = gists_client::diff::unified_diff(prev_content, &f.content, &f.filename);
-        if !chunk.is_empty() {
-            parts.push(chunk);
-        }
-    }
-
-    // Deleted files (in prev but absent in this revision).
-    let cur_names: std::collections::HashSet<&str> =
-        cur_files.iter().map(|f| f.filename.as_str()).collect();
-    let mut deleted: Vec<(&String, &String)> = prev_files
-        .iter()
-        .filter(|(n, _)| !cur_names.contains(n.as_str()))
-        .collect();
-    deleted.sort_unstable_by_key(|(n, _)| n.as_str());
-    for (filename, content) in deleted {
-        let chunk = gists_client::diff::unified_diff(content, "", filename);
-        if !chunk.is_empty() {
-            parts.push(chunk);
-        }
-    }
-
-    Ok(parts.join("\n"))
+    Ok(gists_client::diff::assemble_rev_diff(gist.files, &prev_files))
 }
 
 /// Fetch the full gist snapshot at a specific revision SHA from GitHub.
@@ -823,21 +731,14 @@ pub async fn import_execute(
         // Restore category
         let _ = cache::set_gist_category(&target_id, &entry.category);
 
-        // Restore tags: ensure each tag exists, then assign
+        // Restore tags: ensure each tag exists (keeping any existing color),
+        // then assign.
         let mut tag_ids: Vec<i64> = Vec::new();
         for tag_name in &entry.tags {
-            let existing_tags = cache::list_tags().unwrap_or_default();
-            let tag = existing_tags.iter().find(|t| t.name == *tag_name);
-            let tag_id = if let Some(t) = tag {
-                t.id as i64
-            } else {
-                // Create tag with a default color
-                match cache::create_tag(tag_name, "#8b949e") {
-                    Ok(t) => t.id as i64,
-                    Err(_) => continue,
-                }
-            };
-            tag_ids.push(tag_id);
+            match cache::ensure_tag_exists(tag_name, "#8b949e") {
+                Ok(id) => tag_ids.push(id),
+                Err(_) => continue,
+            }
         }
         if !tag_ids.is_empty() {
             let _ = cache::set_gist_tags(&target_id, &tag_ids);
@@ -973,12 +874,7 @@ fn effective_embedding_base_url() -> String {
         }
     };
     // Guard against users who stored the full endpoint path (e.g. ".../v1/embeddings")
-    let trimmed = raw.trim_end_matches('/');
-    if trimmed.ends_with("/embeddings") {
-        trimmed[..trimmed.len() - "/embeddings".len()].to_string()
-    } else {
-        trimmed.to_string()
-    }
+    gists_client::embedding::strip_embeddings_suffix(&raw)
 }
 
 // ── Embedding provider abstraction ───────────────────────────────────────────
@@ -1322,14 +1218,7 @@ pub fn vscode_snippets_preview(
 pub fn vscode_snippets_import(
     items: Vec<vscode_snippets::VscodeSnippet>,
 ) -> Result<i32, String> {
-    let mut imported = 0;
-    for s in items {
-        let files = vec![(s.filename.clone(), s.body.clone())];
-        templates::create_template(&s.name, &s.description, false, &files)
-            .map_err(|e| e.to_string())?;
-        imported += 1;
-    }
-    Ok(imported)
+    templates::import_vscode_snippets(&items).map_err(|e| e.to_string())
 }
 
 // ── Code runner ───────────────────────────────────────────────────────────────

@@ -26,6 +26,21 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
+// ── URL normalization ─────────────────────────────────────────────────────────
+
+/// Normalize a user-configured embeddings base URL: trim trailing slashes and
+/// strip a trailing "/embeddings" path segment so callers can safely append
+/// "/embeddings" themselves. Guards against users who stored the full endpoint
+/// (e.g. "https://api.example.com/v1/embeddings") instead of the base URL.
+pub fn strip_embeddings_suffix(raw: &str) -> String {
+    let trimmed = raw.trim_end_matches('/');
+    if trimmed.ends_with("/embeddings") {
+        trimmed[..trimmed.len() - "/embeddings".len()].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 // ── Text preparation ──────────────────────────────────────────────────────────
 
 /// Build the text that gets embedded for a gist.
@@ -181,5 +196,43 @@ mod tests {
     #[test]
     fn build_embed_text_empty_inputs() {
         assert_eq!(build_embed_text("", &[]), "");
+    }
+
+    #[test]
+    fn strip_embeddings_suffix_removes_endpoint_path() {
+        assert_eq!(
+            strip_embeddings_suffix("https://api.example.com/v1/embeddings"),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            strip_embeddings_suffix("https://api.example.com/v1/embeddings/"),
+            "https://api.example.com/v1"
+        );
+    }
+
+    #[test]
+    fn strip_embeddings_suffix_trims_trailing_slashes_only() {
+        assert_eq!(
+            strip_embeddings_suffix("https://api.example.com/v1///"),
+            "https://api.example.com/v1"
+        );
+    }
+
+    #[test]
+    fn strip_embeddings_suffix_leaves_clean_url_untouched() {
+        assert_eq!(
+            strip_embeddings_suffix("https://api.example.com/v1"),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(strip_embeddings_suffix(""), "");
+    }
+
+    #[test]
+    fn strip_embeddings_suffix_does_not_match_partial_word() {
+        // "myembeddings" is not the "/embeddings" path segment.
+        assert_eq!(
+            strip_embeddings_suffix("https://x.com/myembeddings"),
+            "https://x.com/myembeddings"
+        );
     }
 }

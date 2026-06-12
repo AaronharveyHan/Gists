@@ -33,6 +33,29 @@ pub fn app_data_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join(APP_IDENTIFIER))
 }
 
+// ── Token format validation ───────────────────────────────────────────────────
+
+/// Validate the *format* of a GitHub personal-access token without touching
+/// the network. Returns the trimmed token on success so callers can use it
+/// directly. Shared by `set_token` and `add_account`.
+pub fn validate_token_format(raw: &str) -> Result<String, String> {
+    let token = raw.trim().to_string();
+    if token.is_empty() {
+        return Err("Token cannot be empty".into());
+    }
+    let known_prefix = token.starts_with("ghp_")
+        || token.starts_with("ghu_")
+        || token.starts_with("gho_")
+        || token.starts_with("ghs_")
+        || token.starts_with("github_pat_");
+    if !known_prefix || token.len() < 20 {
+        return Err(
+            "Invalid token format — expected ghp_…, ghu_…, gho_…, or github_pat_…".into(),
+        );
+    }
+    Ok(token)
+}
+
 // ── OS Keychain ───────────────────────────────────────────────────────────────
 
 /// Store token in the OS keychain. Falls back silently if unavailable.
@@ -311,5 +334,41 @@ mod tests {
         assert!(encoded.starts_with("enc:v1:"));
         assert_ne!(encoded, plaintext);
         assert_eq!(decrypt_from_db(&encoded).as_deref(), Some(plaintext));
+    }
+
+    #[test]
+    fn token_format_accepts_known_prefixes() {
+        for prefix in ["ghp_", "ghu_", "gho_", "ghs_", "github_pat_"] {
+            let token = format!("{prefix}{}", "a".repeat(30));
+            assert_eq!(validate_token_format(&token).as_deref(), Ok(token.as_str()));
+        }
+    }
+
+    #[test]
+    fn token_format_trims_whitespace() {
+        let token = format!("ghp_{}", "a".repeat(30));
+        assert_eq!(
+            validate_token_format(&format!("  {token}\n")).as_deref(),
+            Ok(token.as_str())
+        );
+    }
+
+    #[test]
+    fn token_format_rejects_empty_and_whitespace() {
+        assert!(validate_token_format("").is_err());
+        assert!(validate_token_format("   \t\n").is_err());
+    }
+
+    #[test]
+    fn token_format_rejects_unknown_prefix() {
+        assert!(validate_token_format(&format!("tok_{}", "a".repeat(30))).is_err());
+        // Classic 40-char hex PAT (pre-2021, no prefix) is intentionally rejected.
+        assert!(validate_token_format(&"a".repeat(40)).is_err());
+    }
+
+    #[test]
+    fn token_format_rejects_too_short() {
+        // Known prefix but total length below 20 chars.
+        assert!(validate_token_format("ghp_short").is_err());
     }
 }

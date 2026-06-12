@@ -916,6 +916,31 @@ pub fn create_tag(name: &str, color: &str) -> Result<Tag> {
     })
 }
 
+/// Find a tag by name (case-insensitive) or create it with `default_color`.
+/// Unlike `create_tag`, an existing tag's color is left untouched — used by
+/// the backup importer, which must not clobber user-chosen colors.
+pub fn ensure_tag_exists(name: &str, default_color: &str) -> Result<i64> {
+    with_db(|conn| ensure_tag_exists_inner(conn, name, default_color))
+}
+
+pub(crate) fn ensure_tag_exists_inner(
+    conn: &Connection,
+    name: &str,
+    default_color: &str,
+) -> Result<i64> {
+    conn.execute(
+        "INSERT INTO tags(name, color) VALUES(?1, ?2)
+         ON CONFLICT(name) DO NOTHING",
+        params![name, default_color],
+    )?;
+    let id = conn.query_row(
+        "SELECT id FROM tags WHERE name = ?1 COLLATE NOCASE",
+        params![name],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(id)
+}
+
 pub fn delete_tag(tag_id: i64) -> Result<()> {
     with_db(|conn| {
         conn.execute("DELETE FROM tags WHERE id = ?1", params![tag_id])?;
@@ -1603,5 +1628,50 @@ mod tests {
             )
             .unwrap();
         assert_eq!(snap, 1);
+    }
+
+    // ── ensure_tag_exists ────────────────────────────────────────────────────
+
+    #[test]
+    fn ensure_tag_creates_when_missing() {
+        let conn = mem_db();
+        let id = ensure_tag_exists_inner(&conn, "rust", "#dea584").unwrap();
+        let (name, color): (String, String) = conn
+            .query_row("SELECT name, color FROM tags WHERE id=?1", [id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(name, "rust");
+        assert_eq!(color, "#dea584");
+    }
+
+    #[test]
+    fn ensure_tag_returns_existing_id_and_keeps_color() {
+        let conn = mem_db();
+        conn.execute("INSERT INTO tags(name, color) VALUES('rust', '#custom')", [])
+            .unwrap();
+        let existing_id: i64 = conn
+            .query_row("SELECT id FROM tags WHERE name='rust'", [], |r| r.get(0))
+            .unwrap();
+
+        // Re-ensuring must not create a duplicate nor clobber the color.
+        let id = ensure_tag_exists_inner(&conn, "rust", "#8b949e").unwrap();
+        assert_eq!(id, existing_id);
+        let color: String = conn
+            .query_row("SELECT color FROM tags WHERE id=?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(color, "#custom");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tags WHERE name='rust'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn ensure_tag_is_idempotent() {
+        let conn = mem_db();
+        let a = ensure_tag_exists_inner(&conn, "python", "#3572A5").unwrap();
+        let b = ensure_tag_exists_inner(&conn, "python", "#3572A5").unwrap();
+        assert_eq!(a, b);
     }
 }

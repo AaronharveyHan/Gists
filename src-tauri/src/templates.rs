@@ -133,6 +133,18 @@ pub fn delete_template(id: i32) -> Result<()> {
     })
 }
 
+/// Import VS Code snippets as private templates (one file per snippet).
+/// Returns the number imported. Fails fast on the first DB error.
+pub fn import_vscode_snippets(items: &[crate::vscode_snippets::VscodeSnippet]) -> Result<i32> {
+    let mut imported = 0;
+    for s in items {
+        let files = vec![(s.filename.clone(), s.body.clone())];
+        create_template(&s.name, &s.description, false, &files)?;
+        imported += 1;
+    }
+    Ok(imported)
+}
+
 pub fn save_gist_as_template(gist_id: &str, name: &str) -> Result<Template> {
     let (description, is_public, files) = with_db(|conn| {
         let (desc, pub_): (String, bool) = conn.query_row(
@@ -230,5 +242,38 @@ mod tests {
         let names: Vec<&str> = tmpl.files.iter().map(|f| f.filename.as_str()).collect();
         assert!(names.contains(&"one.py"));
         assert!(names.contains(&"two.py"));
+    }
+
+    #[test]
+    fn import_vscode_snippets_creates_private_templates() {
+        ensure_test_db();
+
+        let snippet = |name: &str, filename: &str, body: &str| {
+            crate::vscode_snippets::VscodeSnippet {
+                name: name.to_string(),
+                description: format!("{name} desc"),
+                prefix: String::new(),
+                language: String::new(),
+                filename: filename.to_string(),
+                body: body.to_string(),
+                source: String::new(),
+            }
+        };
+        let items = vec![
+            snippet("Snip One", "one.py", "print(1)"),
+            snippet("Snip Two", "two.js", "console.log(2)"),
+        ];
+
+        let imported = import_vscode_snippets(&items).unwrap();
+        assert_eq!(imported, 2);
+
+        let all = list_templates().unwrap();
+        let one = all.iter().find(|t| t.name == "Snip One").expect("Snip One imported");
+        // Snippet imports are always private, single-file, body preserved.
+        assert!(!one.is_public);
+        assert_eq!(one.files.len(), 1);
+        assert_eq!(one.files[0].filename, "one.py");
+        assert_eq!(one.files[0].content, "print(1)");
+        assert!(all.iter().any(|t| t.name == "Snip Two"));
     }
 }

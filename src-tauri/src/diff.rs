@@ -244,6 +244,100 @@ fn diff_ops(base: &[&str], modified: &[&str]) -> Vec<DiffOp> {
     ops
 }
 
+// ── File-set merge ────────────────────────────────────────────────────────────
+
+/// Merge three file sets (base snapshot, local edits, remote state) file by
+/// file. Semantics per file:
+///   - present on both sides            → line-level `three_way_merge`
+///   - new local file (absent in base)  → keep local, no conflict
+///   - remote deleted, local edited     → keep local, flag conflict
+///   - only in remote                   → take remote
+///   - deleted on both sides            → omit
+pub fn merge_file_sets(
+    base: &std::collections::HashMap<String, String>,
+    local: &std::collections::HashMap<String, String>,
+    remote: &std::collections::HashMap<String, String>,
+) -> crate::models::MergeOutcome {
+    use crate::models::{MergeOutcome, MergedFile};
+
+    // Union of all filenames across base, local, remote (sorted for stability).
+    let mut all_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    all_names.extend(base.keys().cloned());
+    all_names.extend(local.keys().cloned());
+    all_names.extend(remote.keys().cloned());
+
+    let mut files: Vec<MergedFile> = Vec::new();
+    let mut any_conflict = false;
+
+    for name in all_names {
+        let b = base.get(&name).map(|s| s.as_str()).unwrap_or("");
+        let l = local.get(&name).map(|s| s.as_str());
+        let r = remote.get(&name).map(|s| s.as_str());
+
+        let (content, had_conflict) = match (l, r) {
+            (Some(lc), Some(rc)) => {
+                let result = three_way_merge(b, lc, rc);
+                (result.content, result.had_conflict)
+            }
+            // File only in local — keep it (new local file).
+            (Some(lc), None) if b.is_empty() => (lc.to_string(), false),
+            // Remote deleted, local still has it — keep local, flag conflict.
+            (Some(lc), None) => (lc.to_string(), true),
+            // Only in remote — take it.
+            (None, Some(rc)) => (rc.to_string(), false),
+            // Only in base (deleted by both) — omit.
+            (None, None) => continue,
+        };
+
+        if had_conflict {
+            any_conflict = true;
+        }
+        files.push(MergedFile { filename: name, content, had_conflict });
+    }
+
+    MergeOutcome { files, any_conflict }
+}
+
+// ── Revision diff assembly ────────────────────────────────────────────────────
+
+/// Build the combined unified diff between one gist revision and its
+/// predecessor. `prev_files` maps filename → content at the previous revision;
+/// files missing there appear as additions, files only there as deletions.
+/// Output chunks are sorted by filename (modified/new first, then deleted).
+pub fn assemble_rev_diff(
+    mut cur_files: Vec<crate::models::GistFile>,
+    prev_files: &std::collections::HashMap<String, String>,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // Modified + new files (present in this revision).
+    cur_files.sort_unstable_by(|a, b| a.filename.cmp(&b.filename));
+    for f in &cur_files {
+        let prev_content = prev_files.get(&f.filename).map(|s| s.as_str()).unwrap_or("");
+        let chunk = unified_diff(prev_content, &f.content, &f.filename);
+        if !chunk.is_empty() {
+            parts.push(chunk);
+        }
+    }
+
+    // Deleted files (in prev but absent in this revision).
+    let cur_names: std::collections::HashSet<&str> =
+        cur_files.iter().map(|f| f.filename.as_str()).collect();
+    let mut deleted: Vec<(&String, &String)> = prev_files
+        .iter()
+        .filter(|(n, _)| !cur_names.contains(n.as_str()))
+        .collect();
+    deleted.sort_unstable_by_key(|(n, _)| n.as_str());
+    for (filename, content) in deleted {
+        let chunk = unified_diff(content, "", filename);
+        if !chunk.is_empty() {
+            parts.push(chunk);
+        }
+    }
+
+    parts.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +474,133 @@ mod tests {
         let r = three_way_merge(base, local, remote);
         assert!(!r.had_conflict);
         assert_eq!(r.content, "a\nL\n");
+    }
+
+    // ── merge_file_sets ──────────────────────────────────────────────────────
+
+    fn file_map(entries: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(n, c)| (n.to_string(), c.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn file_sets_merge_both_sides_via_three_way() {
+        // Non-overlapping edits to the same file merge cleanly.
+        let base = file_map(&[("a.txt", "1\n2\n3\n")]);
+        let local = file_map(&[("a.txt", "L\n2\n3\n")]);
+        let remote = file_map(&[("a.txt", "1\n2\nR\n")]);
+        let out = merge_file_sets(&base, &local, &remote);
+        assert!(!out.any_conflict);
+        assert_eq!(out.files.len(), 1);
+        assert_eq!(out.files[0].content, "L\n2\nR\n");
+    }
+
+    #[test]
+    fn file_sets_new_local_file_kept_without_conflict() {
+        let base = file_map(&[]);
+        let local = file_map(&[("new.rs", "fn main() {}\n")]);
+        let remote = file_map(&[]);
+        let out = merge_file_sets(&base, &local, &remote);
+        assert!(!out.any_conflict);
+        assert_eq!(out.files[0].filename, "new.rs");
+        assert!(!out.files[0].had_conflict);
+    }
+
+    #[test]
+    fn file_sets_remote_deleted_local_edited_is_conflict() {
+        // File existed in base, remote deleted it, local still has it.
+        let base = file_map(&[("gone.txt", "old\n")]);
+        let local = file_map(&[("gone.txt", "edited\n")]);
+        let remote = file_map(&[]);
+        let out = merge_file_sets(&base, &local, &remote);
+        assert!(out.any_conflict);
+        assert_eq!(out.files[0].content, "edited\n");
+        assert!(out.files[0].had_conflict);
+    }
+
+    #[test]
+    fn file_sets_remote_only_file_taken() {
+        let base = file_map(&[]);
+        let local = file_map(&[]);
+        let remote = file_map(&[("r.md", "remote\n")]);
+        let out = merge_file_sets(&base, &local, &remote);
+        assert!(!out.any_conflict);
+        assert_eq!(out.files[0].content, "remote\n");
+    }
+
+    #[test]
+    fn file_sets_deleted_on_both_sides_omitted() {
+        let base = file_map(&[("dead.txt", "x\n")]);
+        let local = file_map(&[]);
+        let remote = file_map(&[]);
+        let out = merge_file_sets(&base, &local, &remote);
+        assert!(!out.any_conflict);
+        assert!(out.files.is_empty());
+    }
+
+    #[test]
+    fn file_sets_output_sorted_by_filename() {
+        let base = file_map(&[]);
+        let local = file_map(&[("z.txt", "z\n"), ("a.txt", "a\n")]);
+        let remote = file_map(&[("m.txt", "m\n")]);
+        let out = merge_file_sets(&base, &local, &remote);
+        let names: Vec<&str> = out.files.iter().map(|f| f.filename.as_str()).collect();
+        assert_eq!(names, ["a.txt", "m.txt", "z.txt"]);
+    }
+
+    // ── assemble_rev_diff ────────────────────────────────────────────────────
+
+    fn gist_file(name: &str, content: &str) -> crate::models::GistFile {
+        crate::models::GistFile {
+            filename: name.to_string(),
+            language: None,
+            content: content.to_string(),
+            size: content.len() as i64,
+            raw_url: None,
+        }
+    }
+
+    #[test]
+    fn rev_diff_modified_file_produces_chunk() {
+        let cur = vec![gist_file("a.txt", "new\n")];
+        let prev = file_map(&[("a.txt", "old\n")]);
+        let out = assemble_rev_diff(cur, &prev);
+        assert!(out.contains("-old"));
+        assert!(out.contains("+new"));
+    }
+
+    #[test]
+    fn rev_diff_initial_commit_shows_all_as_additions() {
+        let cur = vec![gist_file("a.txt", "hello\n")];
+        let out = assemble_rev_diff(cur, &std::collections::HashMap::new());
+        assert!(out.contains("+hello"));
+        assert!(!out.contains("-hello"));
+    }
+
+    #[test]
+    fn rev_diff_deleted_file_shows_as_removal() {
+        let cur: Vec<crate::models::GistFile> = vec![];
+        let prev = file_map(&[("gone.txt", "bye\n")]);
+        let out = assemble_rev_diff(cur, &prev);
+        assert!(out.contains("-bye"));
+    }
+
+    #[test]
+    fn rev_diff_unchanged_files_produce_empty_output() {
+        let cur = vec![gist_file("same.txt", "x\n")];
+        let prev = file_map(&[("same.txt", "x\n")]);
+        assert_eq!(assemble_rev_diff(cur, &prev), "");
+    }
+
+    #[test]
+    fn rev_diff_orders_modified_before_deleted() {
+        let cur = vec![gist_file("z_mod.txt", "new\n")];
+        let prev = file_map(&[("a_del.txt", "bye\n"), ("z_mod.txt", "old\n")]);
+        let out = assemble_rev_diff(cur, &prev);
+        let mod_pos = out.find("z_mod.txt").unwrap();
+        let del_pos = out.find("a_del.txt").unwrap();
+        assert!(mod_pos < del_pos, "modified chunk should come before deleted");
     }
 }
