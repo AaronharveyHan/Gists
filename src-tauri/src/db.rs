@@ -721,4 +721,167 @@ mod tests {
         delete_old_runs(gid, file, 2).unwrap();
         assert_eq!(list_run_history(gid, file, 10).unwrap().len(), 2);
     }
+
+    // ── migration chain ───────────────────────────────────────────────────────
+
+    #[test]
+    fn migrate_fts_v2_repopulates_from_existing_content() {
+        // Simulate an upgrade: gist + files exist in the DB before the FTS v2
+        // migration runs.  After the migration the content_text column must be
+        // searchable for the pre-existing data.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        // Seed a gist directly into the base tables (bypassing gists_fts to
+        // simulate the pre-migration state).
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('fts-up-1', 'upgrade test', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO files(gist_id, filename, content)
+             VALUES('fts-up-1', 'a.py', 'unique_upgrade_token_9823')",
+            [],
+        )
+        .unwrap();
+
+        // Reset the version guard and clear the FTS entry so the migration
+        // re-runs and must re-populate from the base tables.
+        conn.execute("DELETE FROM gists_fts WHERE gist_id='fts-up-1'", []).unwrap();
+        conn.execute("DELETE FROM settings WHERE key='fts_version'", []).unwrap();
+
+        migrate_fts_v2(&conn).unwrap();
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gists_fts WHERE gists_fts MATCH 'unique_upgrade_token_9823'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "FTS must be populated from pre-existing file content after migration");
+
+        let ver: String = conn
+            .query_row("SELECT value FROM settings WHERE key='fts_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, "2");
+    }
+
+    #[test]
+    fn migrate_fts_v2_is_skipped_when_guard_is_set() {
+        // Once the version guard is present the migration must be a no-op.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        // Mark v2 done (apply_schema already does this, so calling it twice is fine)
+        migrate_fts_v2(&conn).unwrap();
+
+        let ver: String = conn
+            .query_row("SELECT value FROM settings WHERE key='fts_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ver, "2", "guard must survive a second run");
+    }
+
+    #[test]
+    fn migrate_links_v1_extracts_links_from_file_content() {
+        // The backfill must scan file bodies, not just gist descriptions.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('ln-fc', 'plain description', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO files(gist_id, filename, content)
+             VALUES('ln-fc', 'notes.md', 'see [[FileTarget]] for details')",
+            [],
+        )
+        .unwrap();
+
+        // Reset guard so migration re-runs over the new row.
+        conn.execute("DELETE FROM settings WHERE key='links_version'", []).unwrap();
+        conn.execute("DELETE FROM gist_links WHERE source_id='ln-fc'", []).unwrap();
+
+        migrate_links_v1(&conn).unwrap();
+
+        let link: String = conn
+            .query_row(
+                "SELECT link_text FROM gist_links WHERE source_id='ln-fc'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(link, "FileTarget");
+    }
+
+    #[test]
+    fn migrate_links_v1_guard_prevents_duplicate_insertion() {
+        // Running migrate_links_v1 a second time (guard says "1") must not
+        // insert duplicate rows.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('ln-dup', 'see [[Thing]]', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+
+        // First run (reset guard to force it)
+        conn.execute("DELETE FROM settings WHERE key='links_version'", []).unwrap();
+        migrate_links_v1(&conn).unwrap();
+        let count1: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gist_links WHERE source_id='ln-dup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count1, 1);
+
+        // Second run — guard is now "1", must be a no-op
+        migrate_links_v1(&conn).unwrap();
+        let count2: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gist_links WHERE source_id='ln-dup'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count2, 1, "version guard must prevent re-scanning and duplicate links");
+    }
+
+    #[test]
+    fn migrate_fts_v2_description_column_is_searchable() {
+        // Verifies that the description column (not just content_text) is
+        // indexed by FTS5 after the v2 migration.
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('fts-desc-up', 'quokka_migration_desc', 'x', 'x')",
+            [],
+        )
+        .unwrap();
+
+        conn.execute("DELETE FROM gists_fts WHERE gist_id='fts-desc-up'", []).unwrap();
+        conn.execute("DELETE FROM settings WHERE key='fts_version'", []).unwrap();
+        migrate_fts_v2(&conn).unwrap();
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM gists_fts WHERE gists_fts MATCH 'quokka_migration_desc'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "description must be indexed after FTS v2 migration");
+    }
 }

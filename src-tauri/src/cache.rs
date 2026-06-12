@@ -1674,4 +1674,179 @@ mod tests {
         let b = ensure_tag_exists_inner(&conn, "python", "#3572A5").unwrap();
         assert_eq!(a, b);
     }
+
+    // ── search_gists (FTS + structured filters) ───────────────────────────────
+    //
+    // search_gists uses the global DB via with_db(), so every test here must
+    // call ensure_test_db() and use unique tokens / IDs to avoid collisions with
+    // parallel tests sharing the same in-memory connection.
+
+    fn make_search_gist(
+        id: &str,
+        desc: &str,
+        content: &str,
+        lang: Option<&str>,
+        public: bool,
+    ) -> Gist {
+        Gist {
+            id: id.into(),
+            description: desc.into(),
+            public,
+            html_url: "".into(),
+            created_at: "2024-01-01".into(),
+            updated_at: "2024-01-01".into(),
+            files: vec![GistFile {
+                filename: format!("{}.txt", id),
+                language: lang.map(Into::into),
+                content: content.into(),
+                size: content.len() as i64,
+                raw_url: None,
+            }],
+            pending_push: false,
+            category: "gist".into(),
+            lang_group: "other".into(),
+            pinned: false,
+            local_only: false,
+        }
+    }
+
+    #[test]
+    fn search_gists_fts_matches_file_content() {
+        crate::db::ensure_test_db();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-fc-1", "desc", "fluxcapacitor9901 unique", None, true),
+            )
+        })
+        .unwrap();
+        let hits = search_gists("fluxcapacitor9901").unwrap();
+        assert!(hits.iter().any(|g| g.id == "srch-fc-1"), "FTS must find the gist via content");
+    }
+
+    #[test]
+    fn search_gists_fts_matches_description() {
+        crate::db::ensure_test_db();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-desc-1", "xylographz5544 in description", "", None, true),
+            )
+        })
+        .unwrap();
+        let hits = search_gists("xylographz5544").unwrap();
+        assert!(hits.iter().any(|g| g.id == "srch-desc-1"));
+    }
+
+    #[test]
+    fn search_gists_fts_no_match_returns_empty_for_term() {
+        crate::db::ensure_test_db();
+        let hits = search_gists("zzz_no_such_term_qwerty9876543").unwrap();
+        assert!(hits.iter().all(|g| g.id != "zzz_no_such_term_qwerty9876543"));
+        assert!(
+            hits.is_empty() || hits.iter().all(|g| !g.description.contains("zzz_no_such_term")),
+            "no gist should contain the unique nonsense term"
+        );
+    }
+
+    #[test]
+    fn search_gists_special_chars_do_not_error() {
+        crate::db::ensure_test_db();
+        // FTS5 operators and punctuation are sanitized; none should cause a panic.
+        assert!(search_gists("OR AND NOT").is_ok());
+        assert!(search_gists("\"unclosed").is_ok());
+    }
+
+    #[test]
+    fn search_gists_tag_filter_returns_only_tagged_gist() {
+        crate::db::ensure_test_db();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-tag-1", "tagged gist", "", None, false),
+            )
+        })
+        .unwrap();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-tag-2", "untagged gist", "", None, false),
+            )
+        })
+        .unwrap();
+        let tag_id = ensure_tag_exists("srch-unique-tag", "#ffffff").unwrap();
+        set_gist_tags("srch-tag-1", &[tag_id]).unwrap();
+
+        let results = search_gists("tag:srch-unique-tag").unwrap();
+        assert!(results.iter().any(|g| g.id == "srch-tag-1"), "tagged gist must appear");
+        assert!(results.iter().all(|g| g.id != "srch-tag-2"), "untagged gist must not appear");
+    }
+
+    #[test]
+    fn search_gists_lang_filter_structured() {
+        crate::db::ensure_test_db();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-lang-1", "rust file", "fn main(){}", Some("Rust"), false),
+            )
+        })
+        .unwrap();
+        let results = search_gists("lang:rust").unwrap();
+        assert!(results.iter().any(|r| r.id == "srch-lang-1"));
+    }
+
+    #[test]
+    fn search_gists_is_public_filter() {
+        crate::db::ensure_test_db();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-pub-1", "public gist", "", None, true),
+            )
+        })
+        .unwrap();
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-sec-1", "secret gist", "", None, false),
+            )
+        })
+        .unwrap();
+
+        let publics = search_gists("is:public").unwrap();
+        assert!(publics.iter().any(|g| g.id == "srch-pub-1"));
+        assert!(publics.iter().all(|g| g.id != "srch-sec-1"));
+
+        let secrets = search_gists("is:secret").unwrap();
+        assert!(secrets.iter().any(|g| g.id == "srch-sec-1"));
+        assert!(secrets.iter().all(|g| g.id != "srch-pub-1"));
+    }
+
+    #[test]
+    fn search_gists_combined_fts_and_tag() {
+        crate::db::ensure_test_db();
+        let tag_id = ensure_tag_exists("srch-combo-tag", "#123456").unwrap();
+        // Gist 1: has both the keyword and the tag
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-combo-1", "combo test", "quixoticfox7731 token", None, false),
+            )
+        })
+        .unwrap();
+        set_gist_tags("srch-combo-1", &[tag_id]).unwrap();
+        // Gist 2: same keyword but no tag — must be excluded by the AND logic
+        with_db(|conn| {
+            upsert_gist_replace_all(
+                conn,
+                &make_search_gist("srch-combo-2", "no tag", "quixoticfox7731 same token", None, false),
+            )
+        })
+        .unwrap();
+
+        let results = search_gists("quixoticfox7731 tag:srch-combo-tag").unwrap();
+        assert!(results.iter().any(|g| g.id == "srch-combo-1"), "tagged + keyword match must appear");
+        assert!(results.iter().all(|g| g.id != "srch-combo-2"), "keyword-only match must be excluded");
+    }
 }

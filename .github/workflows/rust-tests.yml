@@ -43,3 +43,21 @@ jobs:
       # Runs every #[cfg(test)] module across the library and the gist CLI crate.
       - name: Run tests
         run: cargo test --workspace --locked
+
+  frontend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Run frontend unit tests
+        run: npm run test:unit
