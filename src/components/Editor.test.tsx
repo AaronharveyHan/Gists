@@ -3,7 +3,8 @@ import { render, screen, fireEvent, cleanup, act } from "@testing-library/react"
 import { Editor } from "./Editor";
 import { useGistStore } from "../store/useGistStore";
 import { useI18nStore } from "../store/useI18nStore";
-import type { Gist, GistFile } from "../api/tauri";
+import * as api from "../api/tauri";
+import type { Gist, GistFile, MergeOutcome } from "../api/tauri";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../api/tauri");
@@ -176,5 +177,160 @@ describe("Editor (shell)", () => {
     expect((screen.getByTestId("monaco") as HTMLTextAreaElement).value).toBe("AAA");
     fireEvent.click(screen.getByText("b.ts"));
     expect((screen.getByTestId("monaco") as HTMLTextAreaElement).value).toBe("BBB");
+  });
+});
+
+// ── Conflict resolution flow ────────────────────────────────────────────────
+//
+// Drives the full background-sync conflict path: a newer remote arrives (the
+// gist's updated_at changes in the store) while the user has unsaved edits, so
+// the component fetches the remote, runs a three-way merge, and either silently
+// applies it or surfaces the conflict banner for manual resolution.
+
+const CONFLICT_CONTENT = "<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> remote";
+
+function remoteGist(overrides: Partial<Gist> = {}): Gist {
+  return makeGist({
+    description: "remote desc",
+    updated_at: "2024-02-01T00:00:00Z",
+    files: [makeFile({ filename: "main.ts", content: "remote content" })],
+    ...overrides,
+  });
+}
+
+function mergeOutcome(overrides: Partial<MergeOutcome> = {}): MergeOutcome {
+  return {
+    any_conflict: true,
+    files: [{ filename: "main.ts", content: CONFLICT_CONTENT, had_conflict: true }],
+    ...overrides,
+  };
+}
+
+/**
+ * Simulate a background sync replacing the open gist with a newer revision,
+ * then flush the effect's async fetch→merge chain inside act so all resulting
+ * state updates are settled before assertions run.
+ */
+async function arriveRemote(next: Partial<Gist>) {
+  await act(async () => {
+    const cur = useGistStore.getState().gists[0];
+    useGistStore.setState({ gists: [{ ...cur, ...next }] } as never);
+    // Let the fetchGistFromGitHub → mergeGistConflict → setState chain settle.
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+
+describe("Editor (conflict flow)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useI18nStore.setState({ lang: "en" });
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("silently refreshes (no fetch, no banner) when the user is not dirty", async () => {
+    seed(makeGist());
+    render(<Editor />);
+    await arriveRemote({
+      updated_at: "2024-02-01T00:00:00Z",
+      files: [makeFile({ filename: "main.ts", content: "remote-fresh" })],
+    });
+    expect((screen.getByTestId("monaco") as HTMLTextAreaElement).value).toBe("remote-fresh");
+    expect(api.fetchGistFromGitHub).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Merge conflict/)).toBeNull();
+  });
+
+  it("auto-merges cleanly when there is no conflict — no banner, persists result", async () => {
+    vi.mocked(api.fetchGistFromGitHub).mockResolvedValue(remoteGist());
+    vi.mocked(api.mergeGistConflict).mockResolvedValue(
+      mergeOutcome({
+        any_conflict: false,
+        files: [{ filename: "main.ts", content: "clean-merged", had_conflict: false }],
+      }),
+    );
+    seed(makeGist());
+    render(<Editor />);
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "edited" } });
+    await arriveRemote({ updated_at: "2024-02-01T00:00:00Z" });
+
+    // Merged content applied; no banner.
+    await vi.waitFor(() =>
+      expect((screen.getByTestId("monaco") as HTMLTextAreaElement).value).toBe("clean-merged")
+    );
+    expect(screen.queryByText(/Merge conflict/)).toBeNull();
+    expect(api.mergeGistConflict).toHaveBeenCalledOnce();
+    expect(saveGistDraft).toHaveBeenCalledWith("g1", "remote desc", [["main.ts", "clean-merged"]]);
+  });
+
+  it("surfaces the conflict banner with markers when the merge conflicts", async () => {
+    vi.mocked(api.fetchGistFromGitHub).mockResolvedValue(remoteGist());
+    vi.mocked(api.mergeGistConflict).mockResolvedValue(mergeOutcome());
+    seed(makeGist());
+    render(<Editor />);
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "edited" } });
+    await arriveRemote({ updated_at: "2024-02-01T00:00:00Z" });
+
+    expect(await screen.findByText(/Merge conflict/)).toBeTruthy();
+    // Conflict markers injected into the editor.
+    expect((screen.getByTestId("monaco") as HTMLTextAreaElement).value).toContain("<<<<<<<");
+    // Resolve is blocked while markers remain.
+    expect(screen.getByRole("button", { name: /Conflicts resolved/ })).toHaveProperty("disabled", true);
+  });
+
+  it("enables resolve once markers are removed, then pushes and clears the banner", async () => {
+    vi.mocked(api.fetchGistFromGitHub).mockResolvedValue(remoteGist());
+    vi.mocked(api.mergeGistConflict).mockResolvedValue(mergeOutcome());
+    seed(makeGist());
+    render(<Editor />);
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "edited" } });
+    await arriveRemote({ updated_at: "2024-02-01T00:00:00Z" });
+    await screen.findByText(/Merge conflict/);
+
+    // User resolves by hand: replace the marker content with clean text.
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "resolved" } });
+    const resolveBtn = screen.getByRole("button", { name: /Conflicts resolved/ });
+    expect(resolveBtn).toHaveProperty("disabled", false);
+
+    await act(async () => { fireEvent.click(resolveBtn); });
+    expect(updateGist).toHaveBeenCalledOnce();
+    expect(updateGist).toHaveBeenCalledWith("g1", "my gist", { "main.ts": ["resolved", null] });
+    expect(screen.queryByText(/Merge conflict/)).toBeNull();
+  });
+
+  it("discard mine pulls the remote and clears the banner", async () => {
+    vi.mocked(api.fetchGistFromGitHub).mockResolvedValue(remoteGist());
+    vi.mocked(api.mergeGistConflict).mockResolvedValue(mergeOutcome());
+    seed(makeGist());
+    // pullGistRemote returns the fresh remote revision.
+    const pull = vi.fn().mockResolvedValue(
+      makeGist({ files: [makeFile({ filename: "main.ts", content: "pulled-remote" })] }),
+    );
+    useGistStore.setState({ pullGistRemote: pull } as never);
+
+    render(<Editor />);
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "edited" } });
+    await arriveRemote({ updated_at: "2024-02-01T00:00:00Z" });
+    await screen.findByText(/Merge conflict/);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Discard my changes/ }));
+    });
+    expect(pull).toHaveBeenCalledWith("g1");
+    expect((screen.getByTestId("monaco") as HTMLTextAreaElement).value).toBe("pulled-remote");
+    expect(screen.queryByText(/Merge conflict/)).toBeNull();
+  });
+
+  it("falls back to an offline banner when the remote fetch fails", async () => {
+    vi.mocked(api.fetchGistFromGitHub).mockRejectedValue(new Error("network down"));
+    seed(makeGist());
+    render(<Editor />);
+    fireEvent.change(screen.getByTestId("monaco"), { target: { value: "edited" } });
+    await arriveRemote({ updated_at: "2024-02-01T00:00:00Z" });
+
+    // Banner shows with no auto-merged count (plain "⚠ Merge conflict").
+    expect(await screen.findByText("⚠ Merge conflict")).toBeTruthy();
+    expect(api.mergeGistConflict).not.toHaveBeenCalled();
   });
 });
