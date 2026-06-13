@@ -22,8 +22,6 @@ import { SaveAsTemplateModal } from "./TemplatesModal";
 import { ShareModal } from "./ShareModal";
 import { PromptLibrary } from "./PromptLibrary";
 import { CollectionPicker } from "./CollectionPicker";
-import { ContextMenu } from "./ContextMenu";
-import type { ContextMenuEntry } from "./ContextMenu";
 import { AISelectionModal } from "./AISelectionModal";
 import type { AIAction } from "./AISelectionModal";
 import { BacklinksPanel } from "./BacklinksPanel";
@@ -35,6 +33,10 @@ import type { GistFile, Template } from "../api/tauri";
 import { RUNNABLE_EXTENSIONS } from "../api/tauri";
 import { useThemeStore, resolveMonacoTheme } from "../store/useThemeStore";
 import { useEditorUIStore } from "../store/useEditorUIStore";
+import { EditorGistTabs } from "./EditorGistTabs";
+import { EditorConflictBanner } from "./EditorConflictBanner";
+import type { ConflictState } from "./EditorConflictBanner";
+import { EditorFileTabs } from "./EditorFileTabs";
 
 export type { GistFile };
 
@@ -65,20 +67,6 @@ function isMarkdownFilename(filename: string | null): boolean {
 
 type MdViewMode = "source" | "preview" | "split";
 
-// ── Conflict state ────────────────────────────────────────────────────────────
-
-interface ConflictState {
-  remoteFiles: GistFile[];
-  remoteDescription: string;
-  remoteUpdatedAt: string;
-  /** Files after three-way merge (may contain <<<<<<< markers). */
-  mergedFiles: GistFile[];
-  /** Filenames that still contain conflict markers needing manual resolution. */
-  conflictedFilenames: Set<string>;
-  /** How many files were auto-merged without conflicts. */
-  autoMergedCount: number;
-}
-
 // ── Editor component ──────────────────────────────────────────────────────────
 
 export function Editor() {
@@ -95,11 +83,6 @@ export function Editor() {
     createTag,
     publishGist,
     networkOnline,
-    gists,
-    selectedId,
-    selectGist,
-    openTabIds,
-    closeTab,
   } = useGistStore();
 
   const t = useT();
@@ -153,24 +136,6 @@ export function Editor() {
   // Track filenames deleted locally so pushToGitHub can send null to the API.
   const [deletedFiles, setDeletedFiles] = useState<Set<string>>(new Set());
 
-  // Drag-to-reorder state
-  const [dragSrc, setDragSrc] = useState<string | null>(null);
-  const [dragOver, setDragOver] = useState<string | null>(null);
-
-  // Tab right-click context menu
-  const [tabCtx, setTabCtx] = useState<{ filename: string; x: number; y: number } | null>(null);
-
-  // Inline rename state
-  const [renamingFile, setRenamingFile] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const renameInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (renamingFile && renameInputRef.current) {
-      renameInputRef.current.select();
-    }
-  }, [renamingFile]);
-
   /** Markdown: 源码 / 预览 / 分栏（仅 .md 当前文件显示 Tab） */
   const [mdViewMode, setMdViewMode] = useState<MdViewMode>("split");
   const [previewMarkdown, setPreviewMarkdown] = useState("");
@@ -195,7 +160,6 @@ export function Editor() {
     setConflict(null);
     setShowHistory(false);
     setDeletedFiles(new Set());
-    setRenamingFile(null);
     // Load tags for the newly selected gist
     loadGistTags(gist.id);
     prevUpdatedAt.current = "";
@@ -394,7 +358,7 @@ export function Editor() {
 
   // ── File add / delete / rename ──────────────────────────────────────────
 
-  const handleAddFile = () => {
+  const handleAddFile = (): string => {
     const base = "untitled";
     const existing = new Set(localFiles.map((f) => f.filename));
     let name = base;
@@ -414,9 +378,7 @@ export function Editor() {
     setLocalFiles(updated);
     setActiveFile(name);
     setIsDirty(true);
-    // Enter rename mode immediately so user can set the real filename
-    setRenamingFile(name);
-    setRenameValue(name);
+    return name;
   };
 
   const handleDeleteFile = (filename: string) => {
@@ -469,38 +431,30 @@ export function Editor() {
     debouncedSave(keep, description);
   };
 
-  const startRename = (filename: string) => {
-    setRenamingFile(filename);
-    setRenameValue(filename);
-  };
-
-  const commitRename = () => {
-    if (!renamingFile) return;
-    const trimmed = renameValue.trim();
-    if (!trimmed || trimmed === renamingFile) {
-      // No change or empty — if this was a just-added placeholder with no content, keep it
-      setRenamingFile(null);
-      return;
-    }
-    if (localFiles.some((f) => f.filename !== renamingFile && f.filename === trimmed)) {
-      notify(t.editor.fileExists + " " + trimmed);
-      return;
-    }
-    // Only track old name as deleted for GitHub if it was synced from remote
-    // (locally-added files have raw_url: null and were never pushed)
-    const fileBeingRenamed = localFiles.find((f) => f.filename === renamingFile);
-    if (fileBeingRenamed?.raw_url) {
-      setDeletedFiles((prev) => new Set(prev).add(renamingFile));
-    }
-    const updated = localFiles.map((f) =>
-      f.filename === renamingFile ? { ...f, filename: trimmed } : f
-    );
-    setLocalFiles(updated);
-    if (activeFile === renamingFile) setActiveFile(trimmed);
-    setRenamingFile(null);
-    setIsDirty(true);
-    debouncedSave(updated, description);
-  };
+  const handleCommitRename = useCallback(
+    (oldName: string, newName: string): boolean => {
+      if (localFiles.some((f) => f.filename !== oldName && f.filename === newName)) {
+        notify(t.editor.fileExists + " " + newName);
+        return false;
+      }
+      // Only track old name as deleted for GitHub if it was synced from remote
+      // (locally-added files have raw_url: null and were never pushed)
+      const fileBeingRenamed = localFiles.find((f) => f.filename === oldName);
+      if (fileBeingRenamed?.raw_url) {
+        setDeletedFiles((prev) => new Set(prev).add(oldName));
+      }
+      const updated = localFiles.map((f) =>
+        f.filename === oldName ? { ...f, filename: newName } : f
+      );
+      setLocalFiles(updated);
+      if (activeFile === oldName) setActiveFile(newName);
+      setIsDirty(true);
+      debouncedSave(updated, description);
+      return true;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [localFiles, activeFile, description, debouncedSave]
+  );
 
   // ── Conflict resolution ──────────────────────────────────────────────────
 
@@ -937,76 +891,19 @@ export function Editor() {
     <div className="editor">
 
       {/* Gist tab bar — shown when ≥1 gist is explicitly opened in a tab */}
-      {openTabIds.length > 0 && (
-        <div className="editor__gist-tabs">
-          {openTabIds.map((tabId) => {
-            const g = gists.find((x) => x.id === tabId);
-            const label = g
-              ? (g.description?.trim() || g.files[0]?.filename || tabId.slice(0, 8))
-              : tabId.slice(0, 8);
-            const isActive = tabId === selectedId;
-            return (
-              <div
-                key={tabId}
-                className={`editor__gist-tab${isActive ? " editor__gist-tab--active" : ""}`}
-                onClick={() => selectGist(tabId)}
-                title={g?.description || label}
-              >
-                <span className="editor__gist-tab-label">{label}</span>
-                <button
-                  className="editor__gist-tab-close"
-                  onClick={(e) => { e.stopPropagation(); closeTab(tabId); }}
-                  title="Close tab"
-                >×</button>
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <EditorGistTabs />
 
       {/* Conflict banner — shown only when markers remain after auto-merge */}
       {conflict && (
-        <div className="conflict-banner">
-          <div className="conflict-banner__top">
-            <span className="conflict-banner__msg">
-              {t.editor.mergeConflictBanner(conflict.autoMergedCount)}
-            </span>
-            {remainingConflictFiles.length > 0 && (
-              <span className="conflict-banner__files">
-                {remainingConflictFiles.map((fn) => (
-                  <button
-                    key={fn}
-                    className="conflict-banner__file-chip"
-                    onClick={() => setActiveFile(fn)}
-                    title={fn}
-                  >
-                    {fn}
-                  </button>
-                ))}
-                <span className="conflict-banner__remaining">
-                  {t.editor.conflictsRemaining(remainingConflictFiles.length)}
-                </span>
-              </span>
-            )}
-          </div>
-          <div className="conflict-banner__actions">
-            <button
-              className="btn btn--primary conflict-banner__btn"
-              onClick={handleConflictsResolved}
-              disabled={saving || hasRemainingMarkers}
-              title={hasRemainingMarkers ? t.editor.conflictsRemaining(remainingConflictFiles.length) : undefined}
-            >
-              {t.editor.conflictsResolved}
-            </button>
-            <button
-              className="btn conflict-banner__btn"
-              onClick={handleDiscardMine}
-              disabled={saving}
-            >
-              {t.editor.discardMine}
-            </button>
-          </div>
-        </div>
+        <EditorConflictBanner
+          conflict={conflict}
+          remainingConflictFiles={remainingConflictFiles}
+          hasRemainingMarkers={hasRemainingMarkers}
+          saving={saving}
+          onResolve={handleConflictsResolved}
+          onDiscard={handleDiscardMine}
+          onJumpToFile={setActiveFile}
+        />
       )}
 
       <div className="editor__toolbar">
@@ -1300,121 +1197,22 @@ export function Editor() {
       {/* Collection row */}
       <CollectionPicker gistId={gist.id} />
 
-      {/* File tabs */}
-      <div className="editor__tabs">
-        {localFiles.map((f) => {
-          const isActive = f.filename === activeFile;
-          const isDragging = dragSrc === f.filename;
-          const isDropTarget = dragOver === f.filename && dragSrc !== f.filename;
-          return (
-            <div
-              key={f.filename}
-              className={[
-                "editor__tab",
-                isActive ? "editor__tab--active" : "",
-                isDragging ? "editor__tab--dragging" : "",
-                isDropTarget ? "editor__tab--drop-target" : "",
-              ].filter(Boolean).join(" ")}
-              onClick={() => { if (renamingFile !== f.filename) setActiveFile(f.filename); }}
-              onDoubleClick={() => startRename(f.filename)}
-              onMouseDown={(e) => {
-                // Middle-click closes tab
-                if (e.button === 1 && localFiles.length > 1) {
-                  e.preventDefault();
-                  handleDeleteFile(f.filename);
-                }
-              }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setTabCtx({ filename: f.filename, x: e.clientX, y: e.clientY });
-              }}
-              draggable={renamingFile !== f.filename}
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = "move";
-                setDragSrc(f.filename);
-              }}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                setDragOver(f.filename);
-              }}
-              onDragLeave={() => setDragOver((v) => v === f.filename ? null : v)}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (dragSrc) handleReorderFiles(dragSrc, f.filename);
-                setDragSrc(null);
-                setDragOver(null);
-              }}
-              onDragEnd={() => { setDragSrc(null); setDragOver(null); }}
-            >
-              {renamingFile === f.filename ? (
-                <input
-                  ref={renameInputRef}
-                  className="editor__tab-rename"
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onBlur={commitRename}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitRename();
-                    if (e.key === "Escape") setRenamingFile(null);
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  autoFocus
-                />
-              ) : (
-                <span className="editor__tab-name">{f.filename}</span>
-              )}
-              {isDirty && isActive && (
-                <span className="editor__tab-dot">●</span>
-              )}
-              {localFiles.length > 1 && (
-                <button
-                  className="editor__tab-close"
-                  title={`Close ${f.filename}`}
-                  onClick={(e) => { e.stopPropagation(); handleDeleteFile(f.filename); }}
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          );
-        })}
-        <button
-          className="editor__tab editor__tab--add"
-          onClick={handleAddFile}
-          title={t.editor.newFile}
-        >
-          +
-        </button>
-      </div>
-
-      {/* Tab context menu */}
-      {tabCtx && (() => {
-        const { filename, x, y } = tabCtx;
-        const idx = localFiles.findIndex((f) => f.filename === filename);
-        const items: ContextMenuEntry[] = [
-          { label: t.editor.renameTab, shortcut: t.editor.renameShortcut, onClick: () => startRename(filename) },
-          { separator: true },
-          {
-            label: t.editor.closeTab,
-            onClick: () => handleDeleteFile(filename),
-            disabled: localFiles.length <= 1,
-          },
-          {
-            label: t.editor.closeOthers,
-            onClick: () => handleCloseOthers(filename),
-            disabled: localFiles.length <= 1,
-          },
-          {
-            label: t.editor.closeToRight,
-            onClick: () => handleCloseToRight(filename),
-            disabled: idx >= localFiles.length - 1,
-          },
-        ];
-        return (
-          <ContextMenu x={x} y={y} items={items} onClose={() => setTabCtx(null)} />
-        );
-      })()}
+      {/* File tabs — keyed on gist id so in-progress rename / drag / context-menu
+          state is discarded when the user switches gists (parity with the old
+          setRenamingFile(null) in the gist-selection effect). */}
+      <EditorFileTabs
+        key={gist.id}
+        files={localFiles}
+        activeFile={activeFile}
+        isDirty={isDirty}
+        onActivate={setActiveFile}
+        onAdd={handleAddFile}
+        onDelete={handleDeleteFile}
+        onCommitRename={handleCommitRename}
+        onReorder={handleReorderFiles}
+        onCloseOthers={handleCloseOthers}
+        onCloseToRight={handleCloseToRight}
+      />
 
       {/* Markdown view mode tabs (only for .md files) */}
       {isMdActive && (
