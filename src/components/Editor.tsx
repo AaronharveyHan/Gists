@@ -26,7 +26,6 @@ import { AISelectionModal } from "./AISelectionModal";
 import type { AIAction } from "./AISelectionModal";
 import { BacklinksPanel } from "./BacklinksPanel";
 import { OverflowActions } from "./OverflowActions";
-import type { OverflowItem } from "./OverflowActions";
 import { useAiInlineCompletion } from "../hooks/useAiInlineCompletion";
 import * as api from "../api/tauri";
 import type { GistFile, Template } from "../api/tauri";
@@ -37,6 +36,7 @@ import { EditorGistTabs } from "./EditorGistTabs";
 import { EditorConflictBanner } from "./EditorConflictBanner";
 import type { ConflictState } from "./EditorConflictBanner";
 import { EditorFileTabs } from "./EditorFileTabs";
+import { buildEditorActions } from "./buildEditorActions";
 
 export type { GistFile };
 
@@ -869,6 +869,32 @@ export function Editor() {
     editorRef.current?.getAction("editor.action.startFindReplaceAction")?.run();
   };
 
+  const handlePublish = async () => {
+    if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
+    try { await publishGist(gist.id); notify(t.editor.publishSuccess, "success"); }
+    catch (e) { notify(t.editor.publishFailed + " " + String(e)); }
+  };
+
+  const handleViewOnGitHub = () => {
+    import("@tauri-apps/plugin-shell").then(({ open }) => open(gist.html_url));
+  };
+
+  const handlePromptStar = async () => {
+    if (gist.category === "prompt") {
+      await api.setGistCategory(gist.id, "gist");
+      notify(t.editor.promptRemoved, "success");
+    } else {
+      await api.setGistCategory(gist.id, "prompt");
+      notify(t.editor.promptAdded, "success");
+    }
+    await useGistStore.getState().loadGists();
+  };
+
+  const handleDelete = () => {
+    if (confirm(t.editor.deleteConfirm))
+      deleteGist(gist.id).catch((e) => notify(t.editor.deleteFailed + " " + String(e)));
+  };
+
   const editorOptions = {
     fontSize: editorFontSize,
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
@@ -929,233 +955,25 @@ export function Editor() {
         </div>
 
         {/* ── Overflow toolbar ── */}
-        <OverflowActions items={(() => {
-          const allItems: OverflowItem[] = [
-            // ── Tier 1: Primary actions ──────────────────────────────────────
-            {
-              key: "sync",
-              priority: 1,
-              // Hide when there's nothing to sync (no pending push, not local-only)
-              hidden: !gist.local_only && !gist.pending_push,
-              node: gist.local_only ? (
-                <button
-                  type="button"
-                  className={`btn${networkOnline ? " btn--sync-ready" : ""}`}
-                  onClick={async () => {
-                    if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
-                    try { await publishGist(gist.id); notify(t.editor.publishSuccess, "success"); }
-                    catch (e) { notify(t.editor.publishFailed + " " + String(e)); }
-                  }}
-                  disabled={saving || !networkOnline}
-                  title={networkOnline ? t.editor.publish : t.editor.offline}
-                >
-                  {networkOnline ? `↑ ${t.editor.publish}` : t.editor.offline}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className={`btn${(gist.pending_push && !isDirty && !conflict) ? " btn--sync-ready" : ""}`}
-                  onClick={() => void pushToGitHub()}
-                  disabled={saving || !gist.pending_push || !!conflict || isDirty}
-                  title={isDirty ? t.editor.waitForSave : t.editor.syncToGitHubTitle}
-                >
-                  {`↑ ${t.editor.syncToGitHub}`}
-                </button>
-              ),
-              menuLabel: gist.local_only ? t.editor.publish : t.editor.syncToGitHub,
-              menuOnClick: gist.local_only
-                ? async () => {
-                    if (!networkOnline) { notify(t.editor.offlineCannotPublish); return; }
-                    try { await publishGist(gist.id); notify(t.editor.publishSuccess, "success"); }
-                    catch (e) { notify(t.editor.publishFailed + " " + String(e)); }
-                  }
-                : () => void pushToGitHub(),
-              menuDisabled: gist.local_only
-                ? saving || !networkOnline
-                : saving || !gist.pending_push || !!conflict || isDirty,
-            },
-            {
-              key: "run",
-              priority: 1,
-              hidden: !isRunnable,
-              node: (
-                <button
-                  type="button"
-                  className={`btn editor__run-btn${showRun ? " btn--primary" : " btn--primary"}`}
-                  onClick={handleRun}
-                  title={t.editor.runTitle}
-                >
-                  {t.editor.run}
-                </button>
-              ),
-              menuLabel: t.editor.run,
-              menuOnClick: handleRun,
-            },
-
-            // ── Separator before editing tools ────────────────────────────────
-            { key: "sep-edit", priority: 2, isSeparator: true, node: null, menuLabel: "" },
-
-            // ── Tier 3: Editing tools (icon-only) ────────────────────────────
-            {
-              key: "find",
-              priority: 2,
-              node: (
-                <button type="button" className="btn btn--icon" onClick={openFind} title={t.editor.findTitle}>
-                  ⌕
-                </button>
-              ),
-              menuLabel: t.editor.find,
-              menuOnClick: openFind,
-            },
-            {
-              key: "replace",
-              priority: 2,
-              node: (
-                <button type="button" className="btn btn--icon" onClick={openReplace} title={t.editor.replaceTitle}>
-                  ⇄
-                </button>
-              ),
-              menuLabel: t.editor.replace,
-              menuOnClick: openReplace,
-            },
-
-            // ── Separator before panel toggles ────────────────────────────────
-            { key: "sep-panels", priority: 3, isSeparator: true, node: null, menuLabel: "" },
-
-            // ── Tier 3: Panel toggles (icon-only) ────────────────────────────
-            {
-              key: "history",
-              priority: 3,
-              node: (
-                <button type="button" className={`btn btn--icon${showHistory ? " btn--icon--active" : ""}`} onClick={toggleHistory} title={t.editor.historyTitle}>
-                  ↺
-                </button>
-              ),
-              menuLabel: t.editor.history,
-              menuOnClick: toggleHistory,
-            },
-            {
-              key: "ai",
-              priority: 3,
-              node: (
-                <button type="button" className={`btn btn--icon${showAI ? " btn--icon--active" : ""}`} onClick={toggleAI} title={t.editor.aiTitle}>
-                  ✦
-                </button>
-              ),
-              menuLabel: t.editor.ai,
-              menuOnClick: toggleAI,
-            },
-            {
-              key: "share",
-              priority: 4,
-              node: (
-                <button type="button" className="btn btn--icon" onClick={openShare} title={t.editor.shareTitle}>
-                  ↗
-                </button>
-              ),
-              menuLabel: t.editor.share,
-              menuOnClick: openShare,
-            },
-            {
-              key: "backlinks",
-              priority: 4,
-              node: (
-                <button type="button" data-testid="backlinks-btn" className={`btn btn--icon${showBacklinks ? " btn--icon--active" : ""}`} onClick={toggleBacklinks} title={t.backlinks.panelHint + " (⌘⇧B)"}>
-                  ↩
-                </button>
-              ),
-              menuLabel: t.backlinks.panelTitle,
-              menuOnClick: toggleBacklinks,
-            },
-            {
-              key: "template",
-              priority: 4,
-              node: (
-                <button type="button" className="btn btn--icon" onClick={openSaveAsTemplate} title={t.editor.templateTitle}>
-                  ⊞
-                </button>
-              ),
-              menuLabel: t.editor.template,
-              menuOnClick: openSaveAsTemplate,
-            },
-
-            // ── Separator before org tools ────────────────────────────────────
-            { key: "sep-org", priority: 5, isSeparator: true, node: null, menuLabel: "" },
-
-            // ── Tier 3: Org tools (icon-only) ────────────────────────────────
-            {
-              key: "prompt-star",
-              priority: 5,
-              node: (
-                <button
-                  type="button"
-                  className={`btn btn--icon${gist.category === "prompt" ? " btn--icon--active" : ""}`}
-                  onClick={async () => {
-                    if (gist.category === "prompt") {
-                      await api.setGistCategory(gist.id, "gist");
-                      notify(t.editor.promptRemoved, "success");
-                    } else {
-                      await api.setGistCategory(gist.id, "prompt");
-                      notify(t.editor.promptAdded, "success");
-                    }
-                    await useGistStore.getState().loadGists();
-                  }}
-                  title={gist.category === "prompt" ? t.editor.removeFromPrompt : t.editor.addToPrompt}
-                >
-                  {gist.category === "prompt" ? "★" : "☆"}
-                </button>
-              ),
-              menuLabel: gist.category === "prompt" ? t.editor.removeFromPrompt : t.editor.addToPrompt,
-              menuOnClick: async () => {
-                if (gist.category === "prompt") {
-                  await api.setGistCategory(gist.id, "gist");
-                  notify(t.editor.promptRemoved, "success");
-                } else {
-                  await api.setGistCategory(gist.id, "prompt");
-                  notify(t.editor.promptAdded, "success");
-                }
-                await useGistStore.getState().loadGists();
-              },
-            },
-            {
-              key: "prompt-lib",
-              priority: 5,
-              node: (
-                <button type="button" className="btn btn--icon" onClick={() => setShowPromptLib(true)} title={t.editor.libraryTitle}>
-                  ≡
-                </button>
-              ),
-              menuLabel: t.editor.library,
-              menuOnClick: () => setShowPromptLib(true),
-            },
-
-            // ── Always overflow: GitHub link + Delete ────────────────────────
-            {
-              key: "github-link",
-              priority: 6,
-              alwaysOverflow: !gist.local_only,
-              hidden: gist.local_only,
-              node: null,
-              menuLabel: t.editor.viewOnGitHub,
-              menuOnClick: () => {
-                import("@tauri-apps/plugin-shell").then(({ open }) => open(gist.html_url));
-              },
-            },
-            {
-              key: "delete",
-              priority: 6,
-              alwaysOverflow: true,
-              node: null,
-              menuLabel: t.editor.delete,
-              menuOnClick: () => {
-                if (confirm(t.editor.deleteConfirm))
-                  deleteGist(gist.id).catch((e) => notify(t.editor.deleteFailed + " " + String(e)));
-              },
-              menuDanger: true,
-            },
-          ];
-          return allItems;
-        })()}
+        <OverflowActions items={buildEditorActions({
+          gist, networkOnline, saving, isDirty,
+          hasConflict: !!conflict,
+          showHistory, showAI, showBacklinks, showRun, isRunnable, t,
+          onPushToGitHub: () => void pushToGitHub(),
+          onPublish: handlePublish,
+          onDelete: handleDelete,
+          onRun: handleRun,
+          onFind: openFind,
+          onReplace: openReplace,
+          onToggleHistory: toggleHistory,
+          onToggleAI: toggleAI,
+          onShare: openShare,
+          onToggleBacklinks: toggleBacklinks,
+          onTemplate: openSaveAsTemplate,
+          onPromptStar: () => void handlePromptStar(),
+          onPromptLib: () => setShowPromptLib(true),
+          onViewOnGitHub: handleViewOnGitHub,
+        })}
         />
         </div>{/* editor__actions-wrap */}
       </div>
