@@ -1,5 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useGistStore } from "../store/useGistStore";
 import { useThemeStore, type SortOrder } from "../store/useThemeStore";
@@ -9,177 +8,12 @@ import { BulkActionBar } from "./BulkActionBar";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { notify } from "../store/useNotificationStore";
 import { useT } from "../store/useI18nStore";
-import type { CollectionCount, Gist, Tag, SemanticResult, EmbeddingProgress } from "../api/tauri";
+import type { Gist, Tag, SemanticResult, EmbeddingProgress } from "../api/tauri";
 import { semanticSearch as apiSemanticSearch, startEmbeddingIndexer } from "../api/tauri";
+import { SidebarCollectionsPanel } from "./SidebarCollectionsPanel";
+import { SidebarGistList, sortGists, languageColor } from "./SidebarGistList";
+import { SidebarSearchBar } from "./SidebarSearchBar";
 
-const COLLECTION_PALETTE = [
-  "#6366f1","#f59e0b","#10b981","#ef4444",
-  "#3b82f6","#8b5cf6","#ec4899","#14b8a6",
-  "#f97316","#84cc16",
-];
-
-function CollectionsPanel({
-  collections,
-  activeCollectionId,
-  onSelect,
-  onCreate,
-  onDelete,
-  onRename,
-}: {
-  collections: CollectionCount[];
-  activeCollectionId: string | null;
-  onSelect: (id: string | null) => void;
-  onCreate: (name: string, color: string) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
-  onRename: (id: string, name: string, color: string) => Promise<void>;
-}) {
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newColor, setNewColor] = useState(COLLECTION_PALETTE[0]);
-  const t = useT();
-  const [saving, setSaving] = useState(false);
-  const [hovered, setHovered] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editColor, setEditColor] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-  const editInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => { if (creating) setTimeout(() => inputRef.current?.focus(), 30); }, [creating]);
-  useEffect(() => { if (editingId) setTimeout(() => editInputRef.current?.select(), 30); }, [editingId]);
-
-  const handleCreate = async () => {
-    if (!newName.trim()) return;
-    setSaving(true);
-    try {
-      await onCreate(newName.trim(), newColor);
-      setNewName(""); setNewColor(COLLECTION_PALETTE[0]); setCreating(false);
-    } finally { setSaving(false); }
-  };
-
-  const handleRename = async (id: string) => {
-    if (!editName.trim()) return;
-    await onRename(id, editName.trim(), editColor);
-    setEditingId(null);
-  };
-
-  return (
-    <div className="sidebar__collections">
-      <div className="sidebar__filter-heading">
-        {t.sidebar.collections}
-        <button
-          className="sidebar__collections-add-btn"
-          onClick={() => { setCreating((v) => !v); setEditingId(null); }}
-          title={t.sidebar.newCollection}
-        >＋</button>
-      </div>
-
-      {creating && (
-        <div className="sidebar__col-form">
-          <input
-            ref={inputRef}
-            className="sidebar__col-form-input"
-            placeholder={t.sidebar.collectionNamePlaceholder}
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleCreate();
-              if (e.key === "Escape") setCreating(false);
-            }}
-          />
-          <div className="sidebar__col-form-swatches">
-            {COLLECTION_PALETTE.map((c) => (
-              <button
-                key={c}
-                className={`sidebar__col-swatch${newColor === c ? " sidebar__col-swatch--active" : ""}`}
-                style={{ background: c }}
-                onClick={() => setNewColor(c)}
-              />
-            ))}
-          </div>
-          <div className="sidebar__col-form-actions">
-            <button className="btn btn--primary" style={{ fontSize: 11 }} onClick={handleCreate} disabled={!newName.trim() || saving}>
-              {saving ? "…" : t.common.create}
-            </button>
-            <button className="btn" style={{ fontSize: 11 }} onClick={() => setCreating(false)}>{t.common.cancel}</button>
-          </div>
-        </div>
-      )}
-
-      <div className="sidebar__col-list">
-        <button
-          className={`sidebar__col-item${activeCollectionId === null ? " sidebar__col-item--active" : ""}`}
-          onClick={() => onSelect(null)}
-        >
-          <span className="sidebar__col-dot" style={{ background: "var(--text-2)" }} />
-          <span className="sidebar__col-name">{t.sidebar.allGists}</span>
-        </button>
-
-        {collections.map((c) => (
-          <div key={c.id} className="sidebar__col-row" onMouseEnter={() => setHovered(c.id)} onMouseLeave={() => setHovered(null)}>
-            {editingId === c.id ? (
-              <div className="sidebar__col-form sidebar__col-form--inline">
-                <input
-                  ref={editInputRef}
-                  className="sidebar__col-form-input"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleRename(c.id);
-                    if (e.key === "Escape") setEditingId(null);
-                  }}
-                />
-                <div className="sidebar__col-form-swatches">
-                  {COLLECTION_PALETTE.map((col) => (
-                    <button
-                      key={col}
-                      className={`sidebar__col-swatch${editColor === col ? " sidebar__col-swatch--active" : ""}`}
-                      style={{ background: col }}
-                      onClick={() => setEditColor(col)}
-                    />
-                  ))}
-                </div>
-                <div className="sidebar__col-form-actions">
-                  <button className="btn btn--primary" style={{ fontSize: 11 }} onClick={() => handleRename(c.id)}>{t.common.save}</button>
-                  <button className="btn" style={{ fontSize: 11 }} onClick={() => setEditingId(null)}>{t.common.cancel}</button>
-                </div>
-              </div>
-            ) : (
-              <button
-                className={`sidebar__col-item${activeCollectionId === c.id ? " sidebar__col-item--active" : ""}`}
-                onClick={() => onSelect(activeCollectionId === c.id ? null : c.id)}
-              >
-                <span className="sidebar__col-dot" style={{ background: c.color }} />
-                <span className="sidebar__col-name">{c.name}</span>
-                <span className="sidebar__col-count">{c.count}</span>
-                {hovered === c.id && (
-                  <span className="sidebar__col-actions">
-                    <button
-                      className="sidebar__col-action-btn"
-                      title={t.common.rename}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingId(c.id); setEditName(c.name); setEditColor(c.color);
-                      }}
-                    >✎</button>
-                    <button
-                      className="sidebar__col-action-btn sidebar__col-action-btn--danger"
-                      title={t.common.delete}
-                      onClick={async (e) => {
-                        e.stopPropagation();
-                        if (confirm(t.sidebar.deleteCollectionConfirm(c.name))) await onDelete(c.id);
-                      }}
-                    >✕</button>
-                  </span>
-                )}
-              </button>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 const SORT_VALUES: SortOrder[] = ["updated", "created", "name", "files"];
 
@@ -262,110 +96,6 @@ function CategoryFilterPanel({
   );
 }
 
-function languageColor(lang: string | null): string {
-  const map: Record<string, string> = {
-    TypeScript: "#3178c6",
-    JavaScript: "#f1e05a",
-    Python: "#3572A5",
-    Rust: "#dea584",
-    Go: "#00ADD8",
-    Ruby: "#701516",
-    CSS: "#563d7c",
-    HTML: "#e34c26",
-    Shell: "#89e051",
-    Markdown: "#083fa1",
-  };
-  return lang ? (map[lang] ?? "#8b949e") : "#8b949e";
-}
-
-// Memoized so a parent re-render (typing in search, select-mode toggle, a
-// background-sync tick) only reconciles rows whose props actually changed,
-// not every row in the list. For this to hold, all props must be stable:
-// `gist` keeps its object identity until it changes, the callbacks are
-// useCallback'd by the parent, and the store actions below are selected
-// individually (action references are stable, so no whole-store subscription).
-const GistItem = memo(function GistItem({
-  gist, selected, selectMode, checked, onCheck, onContextMenu,
-}: {
-  gist: Gist; selected: boolean;
-  selectMode: boolean; checked: boolean;
-  onCheck: (id: string) => void;
-  onContextMenu: (gist: Gist, x: number, y: number) => void;
-}) {
-  const t = useT();
-  const selectGist = useGistStore((s) => s.selectGist);
-  const togglePin = useGistStore((s) => s.togglePin);
-  const primaryFile = gist.files[0];
-
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onContextMenu(gist, e.clientX, e.clientY);
-  };
-
-  return (
-    <button
-      data-gist-id={gist.id}
-      className={`gist-item ${selected ? "gist-item--selected" : ""} ${checked ? "gist-item--checked" : ""}`}
-      onClick={() => selectMode ? onCheck(gist.id) : selectGist(gist.id)}
-      onContextMenu={handleContextMenu}
-      style={{ "--lang-color": languageColor(primaryFile?.language ?? null) } as React.CSSProperties}
-    >
-      <div className="gist-item__header">
-        {selectMode && (
-          <span className={`gist-item__checkbox ${checked ? "gist-item__checkbox--checked" : ""}`} aria-hidden>
-            {checked ? "✓" : ""}
-          </span>
-        )}
-        <span className="gist-item__filename">
-          {gist.pinned && <span className="gist-item__pin-icon" title="Pinned">📌</span>}
-          {primaryFile?.filename ?? "Untitled"}
-        </span>
-        <span className="gist-item__actions">
-          <span
-            className={`gist-item__pin ${gist.pinned ? "gist-item__pin--active" : ""}`}
-            title={gist.pinned ? t.sidebar.unpin : t.sidebar.pinToTop}
-            onClick={(e) => { e.stopPropagation(); togglePin(gist.id); }}
-            role="button"
-          >
-            ♦
-          </span>
-          <span
-            className="gist-item__visibility"
-            title={gist.public ? t.common.public : t.common.secret}
-          >
-            {gist.public ? "●" : "○"}
-          </span>
-        </span>
-      </div>
-      {gist.description && (
-        <p className="gist-item__desc">{gist.description}</p>
-      )}
-      <div className="gist-item__meta">
-        {primaryFile?.language && (
-          <span className="gist-item__lang">
-            <span
-              style={{ background: languageColor(primaryFile.language) }}
-              className="gist-item__lang-dot"
-            />
-            {primaryFile.language}
-          </span>
-        )}
-        {gist.files.length > 1 && (
-          <span className="gist-item__filecount">
-            {t.sidebar.fileCount(gist.files.length)}
-          </span>
-        )}
-        {gist.local_only && (
-          <span className="gist-item__draft-badge" title={t.editor.localDraft}>
-            {t.common.draft}
-          </span>
-        )}
-      </div>
-    </button>
-  );
-});
-
 function TagFilterPanel({
   allTags,
   activeTagId,
@@ -418,180 +148,6 @@ function TagFilterPanel({
   );
 }
 
-function sortGists(gists: Gist[], order: SortOrder): Gist[] {
-  const sorted = [...gists];
-  sorted.sort((a, b) => {
-    const pa = a.pinned ? 1 : 0;
-    const pb = b.pinned ? 1 : 0;
-    if (pa !== pb) return pb - pa;
-
-    switch (order) {
-      case "updated":
-        return b.updated_at.localeCompare(a.updated_at);
-      case "created":
-        return b.created_at.localeCompare(a.created_at);
-      case "name": {
-        const an = a.files[0]?.filename ?? "";
-        const bn = b.files[0]?.filename ?? "";
-        return an.localeCompare(bn);
-      }
-      case "files":
-        return b.files.length - a.files.length;
-      default:
-        return 0;
-    }
-  });
-  return sorted;
-}
-
-// ── Virtual gist list ─────────────────────────────────────────────────────────
-// Renders only the items visible in the scroll viewport plus a small overscan
-// buffer. At 3,000 gists this keeps DOM nodes under ~30 instead of 3,000.
-
-import type { Translations } from "../i18n/translations";
-
-interface GistListProps {
-  listRef: React.RefObject<HTMLDivElement>;
-  filteredGists: Gist[];
-  selectedId: string | null;
-  selectMode: boolean;
-  checkedIds: Set<string>;
-  toggleCheck: (id: string) => void;
-  openCtxMenu: (gist: Gist, x: number, y: number) => void;
-  // skeleton / empty-state deps
-  gists: Gist[];
-  syncStatus: string;
-  isLocallyFiltered: boolean;
-  searchQuery: string;
-  // semantic mode
-  searchMode: "keyword" | "semantic";
-  semanticError: string | null;
-  semanticBusy: boolean;
-  semanticGists: Gist[];
-  semanticScoreMap: Map<string, number>;
-  t: Translations;
-}
-
-function GistList({
-  listRef, filteredGists, selectedId, selectMode, checkedIds,
-  toggleCheck, openCtxMenu, gists, syncStatus, isLocallyFiltered,
-  searchQuery, searchMode, semanticError, semanticBusy, semanticGists,
-  semanticScoreMap, t,
-}: GistListProps) {
-  // False positive: eslint-plugin-react-hooks 7.x flags @tanstack/react-virtual,
-  // which is hook-safe.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const virtualizer = useVirtualizer({
-    count: filteredGists.length,
-    getScrollElement: () => listRef.current,
-    estimateSize: () => 72,
-    overscan: 6,
-  });
-
-  // Scroll the selected item into view via the virtualizer (works even when the
-  // item is outside the rendered window, unlike a DOM querySelector).
-  const selectedIndex = useMemo(
-    () => filteredGists.findIndex((g) => g.id === selectedId),
-    [filteredGists, selectedId]
-  );
-  useEffect(() => {
-    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
-  }, [selectedIndex]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const items = virtualizer.getVirtualItems();
-  const totalHeight = virtualizer.getTotalSize();
-
-  // ── Semantic search mode ──────────────────────────────────────────────────
-  if (searchMode === "semantic" && searchQuery.trim()) {
-    return (
-      <div className="sidebar__list" data-testid="gist-list" ref={listRef}>
-        {semanticError && (
-          <p className="sidebar__empty sidebar__empty--error">{semanticError}</p>
-        )}
-        {!semanticBusy && !semanticError && semanticGists.length === 0 && (
-          <p className="sidebar__empty">{t.sidebar.noSemanticMatches}</p>
-        )}
-        {semanticGists.map((g) => (
-          <div key={g.id} className="sidebar__semantic-item-wrap">
-            <GistItem
-              gist={g}
-              selected={g.id === selectedId}
-              selectMode={selectMode}
-              checked={checkedIds.has(g.id)}
-              onCheck={toggleCheck}
-              onContextMenu={openCtxMenu}
-            />
-            <div
-              className="sidebar__score-bar"
-              title={`Similarity: ${Math.round((semanticScoreMap.get(g.id) ?? 0) * 100)}%`}
-            >
-              <div
-                className="sidebar__score-bar__fill"
-                style={{ width: `${Math.round((semanticScoreMap.get(g.id) ?? 0) * 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // ── Keyword / normal mode with virtualization ─────────────────────────────
-  return (
-    <div className="sidebar__list" data-testid="gist-list" ref={listRef}>
-      {gists.length === 0 && syncStatus === "syncing" && (
-        <>
-          {[70, 50, 85, 55, 65].map((w, i) => (
-            <div key={i} className="skeleton-item">
-              <div className="skeleton skeleton-item__title" style={{ width: `${w}%` }} />
-              <div className="skeleton skeleton-item__sub" style={{ width: `${w * 0.6}%` }} />
-              <div className="skeleton skeleton-item__meta" style={{ width: `${w * 0.45}%` }} />
-            </div>
-          ))}
-        </>
-      )}
-      {filteredGists.length === 0 && syncStatus !== "syncing" && (
-        <p className="sidebar__empty">
-          {isLocallyFiltered
-            ? t.sidebar.noGistsFilter
-            : searchQuery
-            ? t.sidebar.noResults
-            : t.sidebar.noGists}
-        </p>
-      )}
-      {filteredGists.length > 0 && (
-        <div style={{ height: totalHeight, position: "relative" }}>
-          {items.map((vItem) => {
-            const g = filteredGists[vItem.index];
-            return (
-              <div
-                key={g.id}
-                data-index={vItem.index}
-                ref={virtualizer.measureElement}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: 0,
-                  width: "100%",
-                  transform: `translateY(${vItem.start}px)`,
-                }}
-              >
-                <GistItem
-                  gist={g}
-                  selected={g.id === selectedId}
-                  selectMode={selectMode}
-                  checked={checkedIds.has(g.id)}
-                  onCheck={toggleCheck}
-                  onContextMenu={openCtxMenu}
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function Sidebar({ style }: { style?: React.CSSProperties }) {
   const {
@@ -888,57 +444,18 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
 
   return (
     <aside className="sidebar" style={style}>
-      <div className="sidebar__top">
-        <div className="sidebar__search-wrap">
-          {searchMode === "semantic" ? (
-            <span className="sidebar__search-icon sidebar__search-icon--semantic" title={t.sidebar.semanticActive}>≈</span>
-          ) : (
-            <svg className="sidebar__search-icon" viewBox="0 0 16 16" width="14" height="14">
-              <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.099zm-5.242 1.656a5.5 5.5 0 1 1 0-11 5.5 5.5 0 0 1 0 11z" />
-            </svg>
-          )}
-          <input
-            ref={searchRef}
-            className="sidebar__search"
-            type="text"
-            placeholder={searchMode === "semantic" ? t.sidebar.semanticPlaceholder : t.sidebar.searchPlaceholder}
-            value={searchQuery}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-          />
-          {searchMode === "semantic" && semanticBusy && (
-            <span className="sidebar__search-spinner" title={t.sidebar.searching}>⋯</span>
-          )}
-          {searchQuery && !semanticBusy && (
-            <button className="sidebar__clear" onClick={() => setSearch("")}>
-              ✕
-            </button>
-          )}
-          <button
-            className={`sidebar__mode-toggle ${searchMode === "semantic" ? "sidebar__mode-toggle--active" : ""}`}
-            onClick={handleSearchModeToggle}
-            title={searchMode === "semantic" ? t.sidebar.switchToKeyword : t.sidebar.switchToSemantic}
-          >
-            {searchMode === "semantic" ? "⌨" : "≈"}
-          </button>
-        </div>
-        <button
-          className={`sidebar__refresh ${syncStatus === "syncing" ? "sidebar__refresh--spinning" : ""}`}
-          onClick={() => sync()}
-          title={t.sidebar.sync}
-          disabled={syncStatus === "syncing"}
-        >
-          ↻
-        </button>
-        <button
-          className="sidebar__new"
-          data-testid="new-gist-btn"
-          onClick={() => setShowNew(true)}
-          title={t.sidebar.newGist}
-        >
-          ＋
-        </button>
-      </div>
+      <SidebarSearchBar
+        searchMode={searchMode}
+        onToggleSearchMode={handleSearchModeToggle}
+        searchQuery={searchQuery}
+        onSearchChange={setSearch}
+        onSearchKeyDown={handleSearchKeyDown}
+        semanticBusy={semanticBusy}
+        syncStatus={syncStatus}
+        onSync={() => sync()}
+        onNewGist={() => setShowNew(true)}
+        inputRef={searchRef}
+      />
 
       {/* Embedding index progress bar */}
       {embedProgress && embedProgress.running && embedProgress.total > 0 && (
@@ -972,7 +489,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         </div>
       )}
 
-      <CollectionsPanel
+      <SidebarCollectionsPanel
         collections={allCollections}
         activeCollectionId={activeCollectionId}
         onSelect={setActiveCollection}
@@ -1062,7 +579,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         )}
       </div>
 
-      <GistList
+      <SidebarGistList
         listRef={listRef}
         filteredGists={filteredGists}
         selectedId={selectedId}
