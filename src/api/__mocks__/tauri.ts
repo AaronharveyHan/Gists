@@ -139,6 +139,12 @@ export const mergeGistConflict = vi.fn().mockResolvedValue({ any_conflict: false
 // ── Error capture ─────────────────────────────────────────────────────────────
 export const captureError = vi.fn().mockResolvedValue(undefined);
 
+// ── Runner ────────────────────────────────────────────────────────────────────
+export const runCode = vi.fn().mockResolvedValue(undefined);
+export const killRun = vi.fn().mockResolvedValue(undefined);
+export const listRunHistory = vi.fn().mockResolvedValue([]);
+export const diffRuns = vi.fn().mockResolvedValue("");
+
 // ── Non-function exports ──────────────────────────────────────────────────────
 export const RUNNABLE_EXTENSIONS = new Set([
   "py", "js", "mjs", "cjs", "ts", "sh", "bash", "zsh", "rb", "php", "go",
