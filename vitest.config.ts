@@ -7,7 +7,9 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
-    include: ["src/**/*.test.{ts,tsx}"],
+    // Relative so it composes with the CLI's `--dir src` (patterns resolve
+    // against --dir, not the project root).
+    include: ["**/*.test.{ts,tsx}"],
     exclude: ["node_modules/**", "e2e/**"],
   },
 });
