@@ -9,7 +9,7 @@ import type { CollectionCount } from "../api/tauri";
 const noop = async () => {};
 
 function col(id: string, name: string, color = "#6366f1", count = 0): CollectionCount {
-  return { id, name, color, count };
+  return { id, name, color, icon: "folder", count };
 }
 
 describe("SidebarCollectionsPanel", () => {

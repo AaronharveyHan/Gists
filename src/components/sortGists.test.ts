@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { sortGists } from "./SidebarGistList";
-import type { Gist } from "../api/tauri";
+import type { Gist, GistFile } from "../api/tauri";
+
+function makeFile(overrides: Partial<GistFile> = {}): GistFile {
+  return { filename: "file.ts", language: null, content: "", size: 0, raw_url: null, ...overrides };
+}
 
 function g(overrides: Partial<Gist> & { id: string }): Gist {
   return {
@@ -57,8 +61,8 @@ describe("sortGists", () => {
 
   it("sorts by filename ascending", () => {
     const gists = [
-      g({ id: "z", files: [{ filename: "z.ts", language: null, type: "", content: "", size: 0 }] }),
-      g({ id: "a", files: [{ filename: "a.ts", language: null, type: "", content: "", size: 0 }] }),
+      g({ id: "z", files: [makeFile({ filename: "z.ts" })] }),
+      g({ id: "a", files: [makeFile({ filename: "a.ts" })] }),
     ];
     const result = sortGists(gists, "name");
     expect(result[0].id).toBe("a");
@@ -66,21 +70,21 @@ describe("sortGists", () => {
   });
 
   it("sorts by file count descending", () => {
-    const file = { filename: "f", language: null, type: "", content: "", size: 0 };
+    const file = makeFile();
     const gists = [
-      g({ id: "one", files: [file] }),
+      g({ id: "one",   files: [file] }),
       g({ id: "three", files: [file, file, file] }),
-      g({ id: "two", files: [file, file] }),
+      g({ id: "two",   files: [file, file] }),
     ];
     const result = sortGists(gists, "files");
     expect(result.map((x) => x.id)).toEqual(["three", "two", "one"]);
   });
 
   it("pinned gists stay at top regardless of sort order", () => {
-    const file = { filename: "f", language: null, type: "", content: "", size: 0 };
+    const file = makeFile();
     const gists = [
       g({ id: "unpinned-many", files: [file, file, file] }),
-      g({ id: "pinned-one", files: [file], pinned: true }),
+      g({ id: "pinned-one",    files: [file], pinned: true }),
     ];
     const result = sortGists(gists, "files");
     expect(result[0].id).toBe("pinned-one");

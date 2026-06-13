@@ -17,7 +17,7 @@ function gist(id: string, isPublic = false): Gist {
     html_url: "",
     created_at: "",
     updated_at: "",
-    files: [{ filename: "f.ts", language: null, type: "", content: "", size: 0 }],
+    files: [{ filename: "f.ts", language: null, content: "", size: 0, raw_url: null }],
     pending_push: false,
     local_only: false,
     category: "gist",

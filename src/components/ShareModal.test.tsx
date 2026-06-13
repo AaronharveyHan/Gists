@@ -17,7 +17,7 @@ function remoteGist(overrides: Partial<Gist> = {}): Gist {
     html_url: "https://gist.github.com/testuser/abc123",
     created_at: "",
     updated_at: "",
-    files: [{ filename: "main.ts", language: "TypeScript", type: "text/plain", content: "", size: 10 }],
+    files: [{ filename: "main.ts", language: "TypeScript", content: "", size: 10, raw_url: null }],
     pending_push: false,
     local_only: false,
     category: "gist",
@@ -88,7 +88,7 @@ describe("ShareModal", () => {
   it("shows raw file URLs section when files have raw_url", () => {
     const gist = remoteGist({
       files: [
-        { filename: "readme.md", language: null, type: "text/plain", content: "", size: 5, raw_url: "https://gist.githubusercontent.com/raw/readme.md" },
+        { filename: "readme.md", language: null, content: "", size: 5, raw_url: "https://gist.githubusercontent.com/raw/readme.md" },
       ],
     });
     render(<ShareModal gist={gist} onClose={vi.fn()} />);
