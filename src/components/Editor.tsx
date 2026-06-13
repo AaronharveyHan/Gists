@@ -37,33 +37,23 @@ import { EditorConflictBanner } from "./EditorConflictBanner";
 import type { ConflictState } from "./EditorConflictBanner";
 import { EditorFileTabs } from "./EditorFileTabs";
 import { buildEditorActions } from "./buildEditorActions";
+import {
+  detectLanguage,
+  isMarkdownFilename,
+  cloneFiles,
+  nextUntitledName,
+  emptyFile,
+  reorderFiles,
+  closeOthers,
+  closeToRight,
+  buildFileMap,
+  mergeOutcomeToFiles,
+  filesWithConflictMarkers,
+  hasConflictMarkers,
+  isRenameCollision,
+} from "./editorFiles";
 
 export type { GistFile };
-
-function detectLanguage(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript",
-    js: "javascript", jsx: "javascript",
-    py: "python", rb: "ruby", rs: "rust",
-    go: "go", java: "java", cs: "csharp",
-    cpp: "cpp", c: "c", h: "c",
-    html: "html", css: "css", scss: "scss",
-    json: "json", yaml: "yaml", yml: "yaml",
-    toml: "toml", md: "markdown", sh: "shell",
-    sql: "sql", xml: "xml", php: "php",
-  };
-  return map[ext] ?? "plaintext";
-}
-
-function cloneFiles(files: GistFile[]): GistFile[] {
-  return files.map((f) => ({ ...f }));
-}
-
-function isMarkdownFilename(filename: string | null): boolean {
-  if (!filename) return false;
-  return filename.split(".").pop()?.toLowerCase() === "md";
-}
 
 type MdViewMode = "source" | "preview" | "split";
 
@@ -207,13 +197,7 @@ export function Editor() {
 
           if (!outcome.any_conflict) {
             // Clean auto-merge — apply silently, no banner needed.
-            const merged: GistFile[] = outcome.files.map((mf) => ({
-              filename: mf.filename,
-              language: remote.files.find((f) => f.filename === mf.filename)?.language ?? null,
-              content: mf.content,
-              size: mf.content.length,
-              raw_url: null,
-            }));
+            const merged = mergeOutcomeToFiles(outcome.files, remote.files);
             isProgrammaticUpdate.current = true;
             setLocalFiles(merged);
             setDescription(remote.description);
@@ -233,13 +217,7 @@ export function Editor() {
           }
 
           // Has conflicts — inject merged content (with markers) into editor.
-          const mergedFiles: GistFile[] = outcome.files.map((mf) => ({
-            filename: mf.filename,
-            language: remote.files.find((f) => f.filename === mf.filename)?.language ?? null,
-            content: mf.content,
-            size: mf.content.length,
-            raw_url: null,
-          }));
+          const mergedFiles = mergeOutcomeToFiles(outcome.files, remote.files);
           const conflictedFilenames = new Set(
             outcome.files.filter((f) => f.had_conflict).map((f) => f.filename)
           );
@@ -319,16 +297,7 @@ export function Editor() {
     isWriting.current = true;
     setSaving(true);
     try {
-      const fileMap: Record<string, [string, string | null] | null> = {};
-      for (const f of localFiles) {
-        fileMap[f.filename] = [f.content, null];
-      }
-      for (const name of deletedFiles) {
-        if (!localFiles.some((f) => f.filename === name)) {
-          fileMap[name] = null;
-        }
-      }
-      await updateGist(gist.id, description, fileMap);
+      await updateGist(gist.id, description, buildFileMap(localFiles, deletedFiles));
       setDeletedFiles(new Set());
       notify(t.editor.publishSuccess, "success");
     } catch (e) {
@@ -359,22 +328,8 @@ export function Editor() {
   // ── File add / delete / rename ──────────────────────────────────────────
 
   const handleAddFile = (): string => {
-    const base = "untitled";
-    const existing = new Set(localFiles.map((f) => f.filename));
-    let name = base;
-    let i = 1;
-    while (existing.has(name)) {
-      name = `${base}_${i}`;
-      i++;
-    }
-    const newFile: GistFile = {
-      filename: name,
-      language: null,
-      content: "",
-      size: 0,
-      raw_url: null,
-    };
-    const updated = [...localFiles, newFile];
+    const name = nextUntitledName(localFiles.map((f) => f.filename));
+    const updated = [...localFiles, emptyFile(name)];
     setLocalFiles(updated);
     setActiveFile(name);
     setIsDirty(true);
@@ -394,23 +349,17 @@ export function Editor() {
   };
 
   const handleReorderFiles = (fromName: string, toName: string) => {
-    if (fromName === toName) return;
-    const files = [...localFiles];
-    const fromIdx = files.findIndex((f) => f.filename === fromName);
-    const toIdx = files.findIndex((f) => f.filename === toName);
-    if (fromIdx === -1 || toIdx === -1) return;
-    const [item] = files.splice(fromIdx, 1);
-    files.splice(toIdx, 0, item);
+    const files = reorderFiles(localFiles, fromName, toName);
+    if (files === localFiles) return;
     setLocalFiles(files);
     setIsDirty(true);
     debouncedSave(files, description);
   };
 
   const handleCloseOthers = (filename: string) => {
-    if (localFiles.length <= 1) return;
-    const toDelete = localFiles.filter((f) => f.filename !== filename);
-    setDeletedFiles((prev) => new Set([...prev, ...toDelete.map((f) => f.filename)]));
-    const keep = [localFiles.find((f) => f.filename === filename)!];
+    const { keep, removed } = closeOthers(localFiles, filename);
+    if (removed.length === 0) return;
+    setDeletedFiles((prev) => new Set([...prev, ...removed]));
     setLocalFiles(keep);
     setActiveFile(filename);
     setIsDirty(true);
@@ -418,11 +367,9 @@ export function Editor() {
   };
 
   const handleCloseToRight = (filename: string) => {
-    const idx = localFiles.findIndex((f) => f.filename === filename);
-    if (idx >= localFiles.length - 1) return;
-    const toDelete = localFiles.slice(idx + 1);
-    setDeletedFiles((prev) => new Set([...prev, ...toDelete.map((f) => f.filename)]));
-    const keep = localFiles.slice(0, idx + 1);
+    const { keep, removed } = closeToRight(localFiles, filename);
+    if (removed.length === 0) return;
+    setDeletedFiles((prev) => new Set([...prev, ...removed]));
     setLocalFiles(keep);
     if (!keep.some((f) => f.filename === activeFile)) {
       setActiveFile(keep[keep.length - 1]?.filename ?? null);
@@ -433,7 +380,7 @@ export function Editor() {
 
   const handleCommitRename = useCallback(
     (oldName: string, newName: string): boolean => {
-      if (localFiles.some((f) => f.filename !== oldName && f.filename === newName)) {
+      if (isRenameCollision(localFiles, oldName, newName)) {
         notify(t.editor.fileExists + " " + newName);
         return false;
       }
@@ -459,14 +406,10 @@ export function Editor() {
   // ── Conflict resolution ──────────────────────────────────────────────────
 
   // True when the user has manually removed all <<<<<<< markers.
-  const hasRemainingMarkers = conflict
-    ? localFiles.some((f) => f.content.includes("<<<<<<<"))
-    : false;
+  const hasRemainingMarkers = conflict ? hasConflictMarkers(localFiles) : false;
 
   // Which conflicted files still have markers (drives the file-chip list).
-  const remainingConflictFiles = conflict
-    ? localFiles.filter((f) => f.content.includes("<<<<<<<")).map((f) => f.filename)
-    : [];
+  const remainingConflictFiles = conflict ? filesWithConflictMarkers(localFiles) : [];
 
   // Push the current editor state to GitHub — used after manual resolution.
   const handleConflictsResolved = async () => {
@@ -474,16 +417,7 @@ export function Editor() {
     isWriting.current = true;
     setSaving(true);
     try {
-      const fileMap: Record<string, [string, string | null] | null> = {};
-      for (const f of localFiles) {
-        fileMap[f.filename] = [f.content, null];
-      }
-      for (const name of deletedFiles) {
-        if (!localFiles.some((f) => f.filename === name)) {
-          fileMap[name] = null;
-        }
-      }
-      await updateGist(gist.id, description, fileMap);
+      await updateGist(gist.id, description, buildFileMap(localFiles, deletedFiles));
       setDeletedFiles(new Set());
       setIsDirty(false);
       setConflict(null);
