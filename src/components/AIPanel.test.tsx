@@ -48,7 +48,7 @@ function makeFile(overrides: Partial<GistFile> = {}): GistFile {
 function renderPanel(props: Partial<React.ComponentProps<typeof AIPanel>> = {}) {
   const onClose = vi.fn();
   const onApplyDescription = vi.fn();
-  render(
+  const result = render(
     <AIPanel
       gistId="g1"
       files={[makeFile()]}
@@ -58,7 +58,12 @@ function renderPanel(props: Partial<React.ComponentProps<typeof AIPanel>> = {}) 
       {...props}
     />,
   );
-  return { onClose, onApplyDescription };
+  return { onClose, onApplyDescription, ...result };
+}
+
+/** Are any listeners registered for the given event-name prefix? */
+function hasHandler(prefix: string) {
+  return Object.keys(eventHandlers).some((k) => k.startsWith(prefix));
 }
 
 describe("AIPanel", () => {
@@ -201,5 +206,52 @@ describe("AIPanel", () => {
     } as never);
     renderPanel();
     expect(screen.getByText("Prior answer")).toBeTruthy();
+  });
+
+  // ── Stream lifecycle / cleanup ──────────────────────────────────────────────
+
+  it("registers chunk + done listeners while streaming", async () => {
+    renderPanel();
+    await act(async () => { fireEvent.click(screen.getByText("Explain")); });
+    expect(hasHandler("ai-chunk-")).toBe(true);
+    expect(hasHandler("ai-done-")).toBe(true);
+  });
+
+  it("releases the stream listeners after ai-done", async () => {
+    renderPanel();
+    await act(async () => { fireEvent.click(screen.getByText("Explain")); });
+    await act(async () => { fireIpcEvent("ai-done-", {}); });
+    expect(hasHandler("ai-chunk-")).toBe(false);
+    expect(hasHandler("ai-done-")).toBe(false);
+  });
+
+  it("releases the stream listeners when unmounted mid-stream", async () => {
+    const { unmount } = renderPanel();
+    await act(async () => { fireEvent.click(screen.getByText("Explain")); });
+    expect(hasHandler("ai-done-")).toBe(true);
+    unmount();
+    expect(hasHandler("ai-chunk-")).toBe(false);
+    expect(hasHandler("ai-done-")).toBe(false);
+  });
+
+  it("a late ai-done after unmount does not throw or append", async () => {
+    const { unmount } = renderPanel();
+    await act(async () => { fireEvent.click(screen.getByText("Explain")); });
+    // Capture the done handler, then unmount before it fires.
+    const doneKey = Object.keys(eventHandlers).find((k) => k.startsWith("ai-done-"));
+    const lateDone = doneKey ? eventHandlers[doneKey] : undefined;
+    unmount();
+    // Firing the captured handler after unmount must be a harmless no-op.
+    expect(() => lateDone?.({ payload: {} })).not.toThrow();
+  });
+
+  it("on aiChat error, appends an error message and stops streaming", async () => {
+    vi.mocked(api.aiChat).mockRejectedValueOnce("backend down");
+    renderPanel();
+    await act(async () => { fireEvent.click(screen.getByText("Explain")); });
+    expect(screen.getByText(/Error: backend down/)).toBeTruthy();
+    // streaming reset → preset chips re-enabled, listeners released
+    expect((screen.getByRole("button", { name: "Explain" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(hasHandler("ai-done-")).toBe(false);
   });
 });

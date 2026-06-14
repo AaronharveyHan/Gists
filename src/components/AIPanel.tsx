@@ -74,6 +74,24 @@ export function AIPanel({ gistId, files, description, onApplyDescription, onClos
   const [exporting, setExporting] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Releases the active stream's Tauri listeners; set while a stream is in flight.
+  const cleanupRef = useRef<(() => void) | null>(null);
+  // Guards setState against late events after the panel unmounts.
+  const mountedRef = useRef(true);
+  // Safety-net timer: finalizes if the backend completes but ai-done is missed.
+  const graceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Release listeners + timers on unmount so an in-flight stream can't leak
+  // handlers or call setState on an unmounted component.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (graceTimerRef.current) clearTimeout(graceTimerRef.current);
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+    };
+  }, []);
 
   // Load history when gistId changes (e.g. switching gists with panel open)
   useEffect(() => {
@@ -110,6 +128,11 @@ export function AIPanel({ gistId, files, description, onApplyDescription, onClos
       historyForApi: Msg[],
       actionLabel?: string
     ) => {
+      // Cancel any prior in-flight stream before starting a new one.
+      if (graceTimerRef.current) { clearTimeout(graceTimerRef.current); graceTimerRef.current = null; }
+      cleanupRef.current?.();
+      cleanupRef.current = null;
+
       setStreaming(true);
       setLiveText("");
 
@@ -121,38 +144,45 @@ export function AIPanel({ gistId, files, description, onApplyDescription, onClos
 
       const streamId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       let accumulated = "";
+      let settled = false;
+
+      // Single exit point: append the result, release listeners, reset streaming.
+      // Idempotent (settled guard) so ai-done, the error path, and the safety-net
+      // timer can all race to finalize without double-appending.
+      const finalize = (assistantText: string) => {
+        if (settled) return;
+        settled = true;
+        if (graceTimerRef.current) { clearTimeout(graceTimerRef.current); graceTimerRef.current = null; }
+        cleanupRef.current?.();
+        cleanupRef.current = null;
+        if (!mountedRef.current) return;
+        setMsgs((prev) => [
+          ...prev,
+          { role: "user", content: userContent, actionLabel },
+          { role: "assistant", content: assistantText },
+        ]);
+        setLiveText("");
+        setStreaming(false);
+      };
 
       const ulChunk = await listen<string>(`ai-chunk-${streamId}`, (e) => {
         accumulated += e.payload;
-        setLiveText(accumulated);
+        if (mountedRef.current) setLiveText(accumulated);
       });
 
-      const ulDone = await listen(`ai-done-${streamId}`, () => {
-        const finalAcc = accumulated;
-        setMsgs((prev) => [
-          ...prev,
-          { role: "user", content: userContent, actionLabel },
-          { role: "assistant", content: finalAcc },
-        ]);
-        setLiveText("");
-        setStreaming(false);
-        ulChunk();
-        ulDone();
-      });
+      const ulDone = await listen(`ai-done-${streamId}`, () => finalize(accumulated));
+      cleanupRef.current = () => { ulChunk(); ulDone(); };
 
       try {
         await aiChat(streamId, apiMessages);
+        // Backend finished but ai-done was never delivered → finalize after a
+        // short grace (lets trailing chunks / ai-done win the race). Without
+        // this the panel could stay streaming=true forever with leaked listeners.
+        if (!settled && mountedRef.current) {
+          graceTimerRef.current = setTimeout(() => finalize(accumulated), 1500);
+        }
       } catch (err) {
-        const errText = `Error: ${String(err)}`;
-        setMsgs((prev) => [
-          ...prev,
-          { role: "user", content: userContent, actionLabel },
-          { role: "assistant", content: errText },
-        ]);
-        setLiveText("");
-        setStreaming(false);
-        ulChunk();
-        ulDone();
+        finalize(`Error: ${String(err)}`);
       }
     },
     []
