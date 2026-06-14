@@ -10,23 +10,23 @@
  * For local-only drafts the embed / raw sections are hidden because the
  * gist has no real GitHub identity yet.
  */
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useGistStore } from "../store/useGistStore";
+import { useFlashFlag } from "../hooks/useFlashFlag";
 import type { Gist } from "../api/tauri";
 import { useT } from "../store/useI18nStore";
 
 // ── Copy button ───────────────────────────────────────────────────────────────
 
 function CopyButton({ value, label }: { value: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, flashCopied] = useFlashFlag(1800);
   const t = useT();
   const displayLabel = label ?? t.share.copy;
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      flashCopied();
     } catch {
       // Fallback for environments where clipboard API is restricted
       const el = document.createElement("textarea");
@@ -37,8 +37,7 @@ function CopyButton({ value, label }: { value: string; label?: string }) {
       el.select();
       document.execCommand("copy");
       document.body.removeChild(el);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
+      flashCopied();
     }
   };
 

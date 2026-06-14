@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { useFlashFlag } from "../hooks/useFlashFlag";
 import { useGistStore } from "../store/useGistStore";
 import { notify } from "../store/useNotificationStore";
 import * as api from "../api/tauri";
@@ -159,7 +160,7 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
   const [selected, setSelected]   = useState<Gist | null>(null);
   const [showNew, setShowNew]     = useState(false);
   const [varValues, setVarValues] = useState<Record<string, string>>({});
-  const [copied, setCopied]       = useState(false);
+  const [copied, flashCopied]     = useFlashFlag(1500);
   const filterRef = useRef<HTMLInputElement>(null);
 
   // Focus filter on open
@@ -196,8 +197,7 @@ export function PromptLibrary({ onInsert, onNavigate, onClose }: Props) {
 
   const handleCopy = async () => {
     await writeText(rendered);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    flashCopied();
   };
 
   const pl = t.promptLib;

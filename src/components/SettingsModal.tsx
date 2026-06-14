@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
+import { useFlashFlag } from "../hooks/useFlashFlag";
 import { useThemeStore, PRESETS } from "../store/useThemeStore";
 import {
   getAiConfig, saveAiConfig, getSetting, saveSetting,
@@ -47,7 +48,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [aiProviderId, setAiProviderId] = useState<string>(AI_PROVIDERS[0].id);
   const [aiHasKey, setAiHasKey] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
-  const [aiSaved, setAiSaved] = useState(false);
+  const [aiSaved, flashAiSaved] = useFlashFlag(2000);
 
   // Embedding provider: "remote" (default, uses the API above) | "local" (offline ONNX).
   const [embedProvider, setEmbedProvider] = useState<"remote" | "local">("remote");
@@ -216,8 +217,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       await saveAiConfig(aiBaseUrl, aiApiKey, aiModel, aiEmbeddingModel, "");
       setAiHasKey(aiHasKey || aiApiKey.length > 0);
       setAiApiKey("");
-      setAiSaved(true);
-      setTimeout(() => setAiSaved(false), 2000);
+      flashAiSaved();
     } finally {
       setAiSaving(false);
     }

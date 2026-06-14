@@ -4,7 +4,8 @@
  * Fenced ```mermaid blocks → SVG via mermaid (lazy-loaded).
  * [[gist-name]] wiki-links → clickable, navigate to that gist.
  */
-import { Children, isValidElement, useState, type ReactNode } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
+import { useFlashFlag } from "../hooks/useFlashFlag";
 import type { Components } from "react-markdown";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -39,12 +40,11 @@ function isMermaidPre(children: ReactNode): string | null {
 }
 
 function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, flashCopied] = useFlashFlag(1500);
   const t = useT();
   const handleCopy = () => {
     navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      flashCopied();
     });
   };
   return (
