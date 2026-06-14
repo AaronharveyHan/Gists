@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { useRef } from "react";
 import { SidebarGistList, languageColor } from "./SidebarGistList";
 import type { SidebarGistListProps } from "./SidebarGistList";
@@ -189,24 +189,24 @@ describe("SidebarGistList", () => {
 
   it("the gist row is a keyboard-operable role=button", () => {
     const g = makeGist({ id: "gA" });
-    renderList({ searchMode: "semantic", searchQuery: "q", semanticGists: [g] });
-    const row = document.querySelector(".gist-item") as HTMLElement;
+    const { container } = renderList({ searchMode: "semantic", searchQuery: "q", semanticGists: [g] });
+    const row = container.querySelector(".gist-item") as HTMLElement;
     expect(row.getAttribute("role")).toBe("button");
     expect(row.tabIndex).toBe(0);
   });
 
   it("pressing Enter on the row selects the gist", () => {
     const g = makeGist({ id: "gEnter" });
-    renderList({ searchMode: "semantic", searchQuery: "q", semanticGists: [g] });
-    const row = document.querySelector(".gist-item") as HTMLElement;
+    const { container } = renderList({ searchMode: "semantic", searchQuery: "q", semanticGists: [g] });
+    const row = container.querySelector(".gist-item") as HTMLElement;
     fireEvent.keyDown(row, { key: "Enter" });
     expect(selectGist).toHaveBeenCalledWith("gEnter");
   });
 
   it("the pin is a real button with an accessible label and pressed state", () => {
     const g = makeGist({ id: "gPinBtn", pinned: true });
-    renderList({ searchMode: "semantic", searchQuery: "q", semanticGists: [g] });
-    const pin = screen.getByRole("button", { name: en.sidebar.unpin });
+    const { container } = renderList({ searchMode: "semantic", searchQuery: "q", semanticGists: [g] });
+    const pin = within(container).getByRole("button", { name: en.sidebar.unpin });
     expect(pin.tagName).toBe("BUTTON");
     expect(pin.getAttribute("aria-pressed")).toBe("true");
   });
