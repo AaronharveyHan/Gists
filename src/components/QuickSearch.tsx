@@ -81,7 +81,10 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
   const [results, setResults] = useState<Gist[]>([]);
   const [selected, setSelected] = useState(0);
   const [feedback, setFeedback] = useState<"copied" | "opened" | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef    = useRef<HTMLInputElement>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); }; }, []);
 
   // Focus + reset on window focus
   useEffect(() => {
@@ -114,7 +117,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
     if (!f?.content) return;
     await writeText(f.content);
     setFeedback("copied");
-    setTimeout(hide, 900);
+    hideTimerRef.current = setTimeout(hide, 900);
   }, [hide]);
 
   const handleOpen = useCallback(async (g: Gist) => {
@@ -122,7 +125,7 @@ function SearchMode({ onSwitchCapture }: { onSwitchCapture: () => void }) {
     const main = await WebviewWindow.getByLabel("main");
     await main?.show(); await main?.setFocus();
     setFeedback("opened");
-    setTimeout(hide, 400);
+    hideTimerRef.current = setTimeout(hide, 400);
   }, [hide]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -221,7 +224,16 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
   const [saving,   setSaving]  = useState(false);
   const [saved,    setSaved]   = useState(false);
   const [error,    setError]   = useState<string | null>(null);
-  const titleRef = useRef<HTMLInputElement>(null);
+  const titleRef      = useRef<HTMLInputElement>(null);
+  const focusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (focusTimerRef.current) clearTimeout(focusTimerRef.current);
+      if (saveTimerRef.current)  clearTimeout(saveTimerRef.current);
+    };
+  }, []);
 
   const readClipboard = useCallback(async () => {
     try {
@@ -236,7 +248,8 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
   // Read clipboard on mount + window focus
   useEffect(() => {
     readClipboard();
-    setTimeout(() => titleRef.current?.focus(), 60);
+    focusTimerRef.current = setTimeout(() => titleRef.current?.focus(), 60);
+    return () => { if (focusTimerRef.current) clearTimeout(focusTimerRef.current); };
   }, [readClipboard]);
 
   useEffect(() => {
@@ -248,7 +261,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
   useEffect(() => {
     const unlisten = listen("switch-to-capture", () => {
       readClipboard();
-      setTimeout(() => titleRef.current?.focus(), 60);
+      focusTimerRef.current = setTimeout(() => titleRef.current?.focus(), 60);
     });
     return () => { unlisten.then((f) => f()); };
   }, [readClipboard]);
@@ -271,7 +284,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
         const main = await WebviewWindow.getByLabel("main");
         await main?.show(); await main?.setFocus();
       }
-      setTimeout(() => { setSaved(false); getCurrentWindow().hide(); }, openAfter ? 300 : 1000);
+      saveTimerRef.current = setTimeout(() => { setSaved(false); getCurrentWindow().hide(); }, openAfter ? 300 : 1000);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -383,6 +396,7 @@ function CaptureMode({ onSwitchSearch }: { onSwitchSearch: () => void }) {
 export function QuickSearch() {
   const t = useT();
   const [mode, setMode] = useState<"search" | "capture">("search");
+  const modeResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // The Alt+Shift+Space shortcut emits "switch-to-capture" from Rust.
   useEffect(() => {
@@ -394,10 +408,13 @@ export function QuickSearch() {
   useEffect(() => {
     const unlisten = getCurrentWindow().listen("tauri://blur", () => {
       getCurrentWindow().hide();
-      // Small delay so the next open starts fresh in search mode.
-      setTimeout(() => setMode("search"), 200);
+      if (modeResetTimerRef.current) clearTimeout(modeResetTimerRef.current);
+      modeResetTimerRef.current = setTimeout(() => setMode("search"), 200);
     });
-    return () => { unlisten.then((f) => f()); };
+    return () => {
+      unlisten.then((f) => f());
+      if (modeResetTimerRef.current) clearTimeout(modeResetTimerRef.current);
+    };
   }, []);
 
   return (

@@ -7,6 +7,7 @@ use reqwest::{
     Client, StatusCode,
 };
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::models::*;
 
@@ -32,6 +33,7 @@ fn build_client(token: &str) -> Result<Client> {
     Ok(Client::builder()
         .use_rustls_tls()
         .default_headers(headers)
+        .timeout(Duration::from_secs(30))
         .build()?)
 }
 
