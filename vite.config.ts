@@ -22,6 +22,12 @@ export default defineConfig({
   // Leave unset (default) to disable Sentry entirely — no SDK code is bundled.
   // Also set SENTRY_DSN for the Rust backend crash reporter.
   envPrefix: ["VITE_", "TAURI_"],
+  // esbuild 0.28+ errors when it thinks a target needs destructuring lowering
+  // (it can't fully lower `for (const [a,b] of x)`). All our real webview
+  // targets support destructuring natively, so tell esbuild not to transform it.
+  esbuild: {
+    supported: { destructuring: true },
+  },
   build: {
     target: ["es2021", "chrome105", "safari13"],
     minify: !process.env.TAURI_DEBUG ? "esbuild" : false,
