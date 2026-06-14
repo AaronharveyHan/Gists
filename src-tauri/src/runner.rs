@@ -86,9 +86,15 @@ pub async fn run_code(
         .ok_or_else(|| anyhow::anyhow!("No runner available for '{}'", filename))?;
 
     // Write content to a temp file (same name → correct extension for the interpreter).
+    // Strip any path components from `filename` so a crafted name like "../../x.py"
+    // cannot write outside the sandboxed temp directory.
+    let safe_filename = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("Invalid filename: '{}'", filename))?;
     let tmp_dir = std::env::temp_dir().join(format!("gists-run-{}", run_id));
     tokio::fs::create_dir_all(&tmp_dir).await?;
-    let tmp_path = tmp_dir.join(&filename);
+    let tmp_path = tmp_dir.join(safe_filename);
     tokio::fs::write(&tmp_path, content.as_bytes()).await?;
 
     let mut cmd = Command::new(runner.program);

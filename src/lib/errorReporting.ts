@@ -75,8 +75,17 @@ export function captureError(err: unknown, context?: Record<string, unknown>): v
 
 // ── PII scrubber ──────────────────────────────────────────────────────────────
 
+// Key names whose values are always redacted.
+// \bkey\b matches standalone "key" but NOT "keyboard"/"keyCode".
+// api[_-]key / apikey cover compound forms without a word boundary.
+const SENSITIVE_KEY_RE = /token|secret|password|passwd|auth|apikey|api[_-]key|\bkey\b/i;
+
+// Value-level: redact strings that look like GitHub PATs or OpenAI keys,
+// even when the containing field has an innocuous name (e.g. "message", "url").
+const SENSITIVE_VAL_RE =
+  /gh[pousrh]_[A-Za-z0-9]{10,}|github_pat_[A-Za-z0-9_]{10,}|sk-[A-Za-z0-9]{20,}/;
+
 function scrubEvent(event: object): void {
-  // Strip GitHub token and any key-like strings from breadcrumbs and request data
   scrubValue(event);
 }
 
@@ -84,9 +93,9 @@ function scrubValue(obj: unknown): void {
   if (!obj || typeof obj !== "object") return;
   const record = obj as Record<string, unknown>;
   for (const key of Object.keys(record)) {
-    const lk = key.toLowerCase();
-    if (lk.includes("token") || lk.includes("key") || lk.includes("secret") ||
-        lk.includes("password") || lk.includes("auth")) {
+    if (SENSITIVE_KEY_RE.test(key)) {
+      record[key] = "[Filtered]";
+    } else if (typeof record[key] === "string" && SENSITIVE_VAL_RE.test(record[key] as string)) {
       record[key] = "[Filtered]";
     } else {
       scrubValue(record[key]);
