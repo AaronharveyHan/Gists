@@ -73,11 +73,27 @@ const GistItem = memo(function GistItem({
     onContextMenu(gist, e.clientX, e.clientY);
   };
 
+  const activate = () => (selectMode ? onCheck(gist.id) : selectGist(gist.id));
+
+  // The row is a div-with-role rather than a <button> so it can legally contain
+  // the pin <button> (interactive content can't nest inside a <button>). Keep
+  // it keyboard-operable; ignore keys that originate from inner controls.
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      activate();
+    }
+  };
+
   return (
-    <button
+    <div
       data-gist-id={gist.id}
+      role="button"
+      tabIndex={0}
       className={`gist-item ${selected ? "gist-item--selected" : ""} ${checked ? "gist-item--checked" : ""}`}
-      onClick={() => selectMode ? onCheck(gist.id) : selectGist(gist.id)}
+      onClick={activate}
+      onKeyDown={handleKeyDown}
       onContextMenu={handleContextMenu}
       style={{ "--lang-color": languageColor(primaryFile?.language ?? null) } as React.CSSProperties}
     >
@@ -92,14 +108,17 @@ const GistItem = memo(function GistItem({
           {primaryFile?.filename ?? "Untitled"}
         </span>
         <span className="gist-item__actions">
-          <span
+          <button
+            type="button"
             className={`gist-item__pin ${gist.pinned ? "gist-item__pin--active" : ""}`}
             title={gist.pinned ? t.sidebar.unpin : t.sidebar.pinToTop}
+            aria-label={gist.pinned ? t.sidebar.unpin : t.sidebar.pinToTop}
+            aria-pressed={gist.pinned ?? false}
             onClick={(e) => { e.stopPropagation(); togglePin(gist.id); }}
-            role="button"
+            onKeyDown={(e) => e.stopPropagation()}
           >
             ♦
-          </span>
+          </button>
           <span
             className="gist-item__visibility"
             title={gist.public ? t.common.public : t.common.secret}
@@ -132,7 +151,7 @@ const GistItem = memo(function GistItem({
           </span>
         )}
       </div>
-    </button>
+    </div>
   );
 });
 
