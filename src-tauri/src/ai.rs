@@ -28,6 +28,12 @@ fn extract_sse_delta(data: &str) -> Option<String> {
     }
 }
 
+/// Idle timeout for the streaming endpoint: the request is only aborted if the
+/// server produces *no* progress within this window. Unlike a total request
+/// timeout, this never cuts off a long-but-active generation — as long as the
+/// model keeps emitting tokens (or response headers) it stays alive.
+const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 /// Stream a chat completion to the frontend via Tauri window events.
 /// Emits `ai-chunk-{stream_id}` for each text delta,
 /// then `ai-done-{stream_id}` when complete (or on error).
@@ -39,23 +45,31 @@ pub async fn stream_chat(
     model: &str,
     messages: &[AiMessage],
 ) -> anyhow::Result<()> {
+    // No total `.timeout()` here: that would cap the *entire* generation and
+    // cut off long answers mid-stream. We instead bound the connect phase and
+    // apply a per-read idle timeout below, so only a genuinely stalled server
+    // aborts the request.
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .connect_timeout(std::time::Duration::from_secs(30))
         .build()?;
 
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&ChatRequest {
-            model,
-            messages,
-            stream: true,
-        })
-        .send()
-        .await?;
+    let resp = tokio::time::timeout(
+        STREAM_IDLE_TIMEOUT,
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&ChatRequest {
+                model,
+                messages,
+                stream: true,
+            })
+            .send(),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("AI request timed out waiting for a response"))??;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -66,7 +80,14 @@ pub async fn stream_chat(
     let mut byte_stream = resp.bytes_stream();
     let mut buf = String::new();
 
-    'outer: while let Some(item) = byte_stream.next().await {
+    'outer: loop {
+        // Idle-read timeout: abort only if the server sends nothing for the
+        // whole window. Each received chunk resets the clock.
+        let item = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, byte_stream.next()).await {
+            Err(_) => anyhow::bail!("AI stream stalled (no data within timeout)"),
+            Ok(None) => break,
+            Ok(Some(item)) => item,
+        };
         let bytes = item?;
         buf.push_str(&String::from_utf8_lossy(&*bytes));
 
