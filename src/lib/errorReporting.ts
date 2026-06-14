@@ -10,13 +10,10 @@
  *
  * If VITE_SENTRY_DSN is empty the feature is a no-op even when opted in.
  *
- * CSP NOTE: when building with a DSN, the Sentry SDK POSTs events via fetch()
- * to https://<org>.ingest.sentry.io/...  The current connect-src in
- * src-tauri/tauri.conf.json only allows 'self' + IPC, which will silently
- * block those requests.  Before shipping a Sentry-enabled build, add the
- * ingest host to connect-src, e.g.:
- *   "connect-src": "'self' ipc: http://ipc.localhost https://*.ingest.sentry.io"
- * (or scope it to your specific org subdomain for tighter control).
+ * CSP: the Sentry SDK POSTs events via fetch() to https://<org>.ingest.sentry.io/...
+ * connect-src in src-tauri/tauri.conf.json already includes https://*.ingest.sentry.io
+ * so Sentry requests are allowed.  When no DSN is set, Sentry never initialises and
+ * no requests are made, so the extra CSP directive is harmless.
  */
 
 const DSN = import.meta.env.VITE_SENTRY_DSN as string | undefined;
