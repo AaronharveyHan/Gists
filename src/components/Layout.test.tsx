@@ -20,6 +20,8 @@ vi.mock("./Toolbar", () => ({
 vi.mock("./Sidebar", () => ({ Sidebar: () => <div data-testid="sidebar" /> }));
 vi.mock("./Editor", () => ({
   Editor: () => <div data-testid="editor" />,
+}));
+vi.mock("./NewGistModal", () => ({
   NewGistModal: () => <div data-testid="new-gist-modal" />,
 }));
 vi.mock("./StatusBar", () => ({ StatusBar: () => <div data-testid="statusbar" /> }));

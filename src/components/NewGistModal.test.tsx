@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
-import { NewGistModal } from "./Editor";
+import { NewGistModal } from "./NewGistModal";
 import { useGistStore } from "../store/useGistStore";
 import { useI18nStore } from "../store/useI18nStore";
 import type { Template } from "../api/tauri";
@@ -125,6 +125,34 @@ describe("NewGistModal", () => {
     renderModal();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("Cancel button calls onClose without creating", () => {
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(onCreate).not.toHaveBeenCalled();
+    expect(onCreateLocal).not.toHaveBeenCalled();
+  });
+
+  it("mousedown on the overlay closes, but not on the modal body", () => {
+    const { container } = renderModal();
+    const overlay = container.querySelector(".modal-overlay") as HTMLElement;
+    const body = container.querySelector(".modal") as HTMLElement;
+    fireEvent.mouseDown(body);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.mouseDown(overlay);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("shows an error and stays open when onCreate rejects", async () => {
+    onCreate.mockRejectedValueOnce(new Error("boom"));
+    renderModal();
+    fireEvent.change(screen.getByDisplayValue("untitled.md"), { target: { value: "main.ts" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Content" }), { target: { value: "code" } });
+    fireEvent.click(screen.getByRole("button", { name: "Publish to GitHub" }));
+    await waitFor(() => expect(screen.getByText(/boom/)).toBeTruthy());
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("template mode hides filename/content fields and submits template files", async () => {

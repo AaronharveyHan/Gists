@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useGistStore } from "../store/useGistStore";
 import { useThemeStore, type SortOrder } from "../store/useThemeStore";
 import { useKeyboard } from "../hooks/useKeyboard";
-import { NewGistModal } from "./Editor";
+import { NewGistModal } from "./NewGistModal";
 import { BulkActionBar } from "./BulkActionBar";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { notify } from "../store/useNotificationStore";

@@ -12,7 +12,7 @@ import { StatsPanel } from "./StatsPanel";
 import { LibraryCleanup } from "./LibraryCleanup";
 import { ShortcutsModal } from "./ShortcutsModal";
 import { TemplatesModal } from "./TemplatesModal";
-import { NewGistModal } from "./Editor";
+import { NewGistModal } from "./NewGistModal";
 import { GraphView } from "./GraphView";
 import { useGistStore } from "../store/useGistStore";
 import type { Template } from "../api/tauri";

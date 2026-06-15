@@ -10,8 +10,8 @@ import type { Gist } from "../api/tauri";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../api/tauri");
 
-// NewGistModal (from ./Editor) is the only heavy child — stub it.
-vi.mock("./Editor", () => ({
+// NewGistModal is the only heavy child — stub it.
+vi.mock("./NewGistModal", () => ({
   NewGistModal: ({ onClose }: { onClose: () => void }) => (
     <div data-testid="new-gist-modal"><button onClick={onClose}>close-new</button></div>
   ),
