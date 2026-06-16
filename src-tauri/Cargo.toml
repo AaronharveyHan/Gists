@@ -7,6 +7,9 @@ license = ""
 repository = ""
 edition = "2021"
 rust-version = "1.77"
+# Disambiguate `cargo run` / `tauri dev` when more than one binary target
+# exists (e.g. a `gist` CLI alongside the desktop app's `gists-client` binary).
+default-run = "gists-client"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

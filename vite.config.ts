@@ -9,6 +9,13 @@ export default defineConfig({
     // monaco-vim is UMD and uses require('monaco-editor') internally —
     // also exclude so Vite doesn't wrap it with a CJS shim that breaks require.
     exclude: ["monaco-editor", "monaco-vim"],
+    // Dependency pre-bundling is a SEPARATE esbuild pass from the source
+    // transform below, with its own (default 'modules') target. esbuild 0.28+
+    // hard-errors trying to lower destructuring for it (mermaid/katex use it
+    // heavily), so apply the same override here.
+    esbuildOptions: {
+      supported: { destructuring: true },
+    },
   },
   server: {
     port: 1420,
