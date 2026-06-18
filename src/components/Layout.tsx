@@ -42,6 +42,7 @@ export function Layout() {
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
+  const [showNewGist, setShowNewGist] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
   const [importPath, setImportPath] = useState<string | null>(null);
   const [showContentSearch, setShowContentSearch] = useState(false);
@@ -164,7 +165,7 @@ export function Layout() {
       <div className="layout__body">
         {!zenMode && (
           <>
-            <Sidebar style={{ width: sidebarWidth }} />
+            <Sidebar style={{ width: sidebarWidth }} onNewGist={() => setShowNewGist(true)} />
             <div className="layout__resize-handle" onMouseDown={handleResizeStart} />
           </>
         )}
@@ -210,13 +211,13 @@ export function Layout() {
           }}
         />
       )}
-      {pendingTemplate && (
+      {(showNewGist || pendingTemplate) && (
         <NewGistModal
-          onClose={() => setPendingTemplate(null)}
+          onClose={() => { setShowNewGist(false); setPendingTemplate(null); }}
           onCreate={createGist}
           onCreateLocal={createLocalGist}
           networkOnline={networkOnline}
-          template={pendingTemplate}
+          template={pendingTemplate ?? undefined}
         />
       )}
     </div>

@@ -10,13 +10,6 @@ import type { Gist } from "../api/tauri";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("../api/tauri");
 
-// NewGistModal is the only heavy child — stub it.
-vi.mock("./NewGistModal", () => ({
-  NewGistModal: ({ onClose }: { onClose: () => void }) => (
-    <div data-testid="new-gist-modal"><button onClick={onClose}>close-new</button></div>
-  ),
-}));
-
 type EventHandler = (e: { payload: unknown }) => void;
 const eventHandlers: Record<string, EventHandler> = {};
 vi.mock("@tauri-apps/api/event", () => ({
@@ -59,8 +52,8 @@ function seedStore(over: Record<string, unknown> = {}) {
   } as never);
 }
 
-function renderSidebar() {
-  return render(<Sidebar />);
+function renderSidebar(props: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
+  return render(<Sidebar onNewGist={vi.fn()} {...props} />);
 }
 
 /** The footer count region. */
@@ -271,9 +264,10 @@ describe("Sidebar", () => {
     expect(document.querySelector(".sidebar__embed-error")).toBeTruthy();
   });
 
-  it("the new-gist button opens the new gist modal", () => {
-    renderSidebar();
+  it("the new-gist button calls onNewGist", () => {
+    const onNewGist = vi.fn();
+    renderSidebar({ onNewGist });
     fireEvent.click(screen.getByTestId("new-gist-btn"));
-    expect(screen.getByTestId("new-gist-modal")).toBeTruthy();
+    expect(onNewGist).toHaveBeenCalledOnce();
   });
 });

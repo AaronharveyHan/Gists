@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { useGistStore } from "../store/useGistStore";
 import { useThemeStore, type SortOrder } from "../store/useThemeStore";
 import { useKeyboard } from "../hooks/useKeyboard";
-import { NewGistModal } from "./NewGistModal";
 import { BulkActionBar } from "./BulkActionBar";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { notify } from "../store/useNotificationStore";
@@ -149,14 +148,20 @@ function TagFilterPanel({
 }
 
 
-export function Sidebar({ style }: { style?: React.CSSProperties }) {
+export function Sidebar({
+  style,
+  onNewGist,
+}: {
+  style?: React.CSSProperties;
+  onNewGist: () => void;
+}) {
   const {
-    gists, selectedId, searchQuery, setSearch, sync, syncStatus, createGist,
+    gists, selectedId, searchQuery, setSearch, sync, syncStatus,
     allTags, activeTagId, setActiveTag, deleteTag,
     categoryCounts, activeCategoryId, setActiveCategory,
     allCollections, activeCollectionId, setActiveCollection,
     createCollection, updateCollection, deleteCollection,
-    selectGist, createLocalGist, networkOnline,
+    selectGist,
   } = useGistStore();
   const t = useT();
   const { sortOrder, setSortOrder } = useThemeStore();
@@ -274,7 +279,6 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
 
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [showNew, setShowNew] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
 
@@ -424,8 +428,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
   useKeyboard("r", "meta", doSync);
 
   // Cmd+N opens new gist modal
-  const openNew = useCallback(() => setShowNew(true), []);
-  useKeyboard("n", "meta", openNew);
+  useKeyboard("n", "meta", onNewGist);
 
   // Escape in search box clears query and blurs
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -453,7 +456,7 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         semanticBusy={semanticBusy}
         syncStatus={syncStatus}
         onSync={() => sync()}
-        onNewGist={() => setShowNew(true)}
+        onNewGist={onNewGist}
         inputRef={searchRef}
       />
 
@@ -633,15 +636,6 @@ export function Sidebar({ style }: { style?: React.CSSProperties }) {
         </button>
         {syncStatus === "syncing" && <span className="sidebar__syncing">{t.sidebar.syncing}</span>}
       </div>
-
-      {showNew && (
-        <NewGistModal
-          onClose={() => setShowNew(false)}
-          onCreate={createGist}
-          onCreateLocal={createLocalGist}
-          networkOnline={networkOnline}
-        />
-      )}
 
       {ctxMenu && (
         <ContextMenu
