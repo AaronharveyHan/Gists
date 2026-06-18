@@ -68,9 +68,9 @@ describe("AboutModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "Report an Issue" }));
     fireEvent.click(screen.getByRole("button", { name: "License" }));
     await waitFor(() => expect(openMock).toHaveBeenCalledTimes(3));
-    expect(openMock).toHaveBeenCalledWith("https://github.com/AaronharveyHan/gists_client");
-    expect(openMock).toHaveBeenCalledWith("https://github.com/AaronharveyHan/gists_client/issues");
-    expect(openMock).toHaveBeenCalledWith("https://github.com/AaronharveyHan/gists_client/blob/main/LICENSE");
+    expect(openMock).toHaveBeenCalledWith("https://github.com/AaronharveyHan/Gists");
+    expect(openMock).toHaveBeenCalledWith("https://github.com/AaronharveyHan/Gists/issues");
+    expect(openMock).toHaveBeenCalledWith("https://github.com/AaronharveyHan/Gists/blob/main/LICENSE");
   });
 
   it("reports up to date when no update is available", async () => {
