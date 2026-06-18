@@ -71,7 +71,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEwOEE5NEM2RTYyQkUyMkMKUldRczRpdm14cFNLRU1lbTdSTThqWW8yWStUbG5TRHh6Q3UrSExDYy92UDR0dEJIaFFDUVg0VmoK",
       "endpoints": [
-        "https://github.com/AaronharveyHan/gists_client/releases/latest/download/latest.json"
+        "https://github.com/AaronharveyHan/Gists/releases/latest/download/latest.json"
       ]
     }
   }

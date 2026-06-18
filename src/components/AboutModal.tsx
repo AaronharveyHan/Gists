@@ -10,7 +10,7 @@ type UpdateState =
   | { status: "installing" }
   | { status: "available"; version: string; install: () => Promise<void> };
 
-const REPO_URL = "https://github.com/AaronharveyHan/gists_client";
+const REPO_URL = "https://github.com/AaronharveyHan/Gists";
 
 export function AboutModal({ onClose }: { onClose: () => void }) {
   const t = useT();
