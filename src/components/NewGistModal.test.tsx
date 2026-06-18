@@ -135,14 +135,26 @@ describe("NewGistModal", () => {
     expect(onCreateLocal).not.toHaveBeenCalled();
   });
 
-  it("mousedown on the overlay closes, but not on the modal body", () => {
+  it("renders as a non-blocking floating panel (clicks do not close it)", () => {
     const { container } = renderModal();
-    const overlay = container.querySelector(".modal-overlay") as HTMLElement;
-    const body = container.querySelector(".modal") as HTMLElement;
+    const overlay = container.querySelector(".modal-overlay--floating") as HTMLElement;
+    const body = container.querySelector(".modal--floating") as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(body).toBeTruthy();
+    // No backdrop to dismiss against — clicking neither overlay nor body closes.
     fireEvent.mouseDown(body);
-    expect(onClose).not.toHaveBeenCalled();
     fireEvent.mouseDown(overlay);
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("dragging the header moves the panel via a CSS translate", () => {
+    const { container } = renderModal();
+    const handle = container.querySelector(".modal__drag-handle") as HTMLElement;
+    const panel = container.querySelector(".modal--floating") as HTMLElement;
+    fireEvent.mouseDown(handle, { clientX: 100, clientY: 100 });
+    fireEvent.mouseMove(window, { clientX: 160, clientY: 140 });
+    fireEvent.mouseUp(window);
+    expect(panel.style.transform).toBe("translate(60px, 40px)");
   });
 
   it("shows an error and stays open when onCreate rejects", async () => {

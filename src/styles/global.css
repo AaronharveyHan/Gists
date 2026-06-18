@@ -770,6 +770,23 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
 }
 .modal h2 { font-size: 16px; font-weight: 600; }
 
+/* Floating, draggable panel variant: the overlay lets clicks fall through to
+   the content behind, and only the panel itself is interactive. */
+.modal-overlay--floating {
+  pointer-events: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.modal--floating {
+  pointer-events: auto;
+}
+.modal__drag-handle {
+  cursor: move;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* ── Import modal ─────────────────────────────────────────────────────────── */
 .import-modal { width: min(640px, 95vw); gap: 14px; }
 

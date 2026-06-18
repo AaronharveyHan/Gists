@@ -1,5 +1,10 @@
 /**
- * New Gist modal.
+ * New Gist panel.
+ *
+ * Rendered as a *floating, draggable* panel rather than a blocking modal:
+ *   - The overlay is non-interactive (pointer-events: none) and has no dark
+ *     backdrop, so the editor behind stays fully visible and usable.
+ *   - The header acts as a drag handle so the panel can be moved out of the way.
  *
  * Two creation paths:
  *   - "Publish to GitHub" → onCreate (requires network, hidden in local mode)
@@ -8,7 +13,7 @@
  * When a `template` is supplied the filename/content fields are hidden and the
  * template's own files are submitted verbatim.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useGistStore } from "../store/useGistStore";
 import { useT } from "../store/useI18nStore";
 import type { Template } from "../api/tauri";
@@ -36,6 +41,27 @@ export function NewGistModal({
   const [isPublic, setIsPublic] = useState(template?.is_public ?? false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Drag-to-move: offset applied to the centred panel via a CSS translate.
+  const [pos, setPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    dragRef.current = { px: e.clientX, py: e.clientY, ox: pos.x, oy: pos.y };
+    const onMove = (ev: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d) return;
+      setPos({ x: d.ox + ev.clientX - d.px, y: d.oy + ev.clientY - d.py });
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
 
   // Close on Escape
   useEffect(() => {
@@ -92,12 +118,12 @@ export function NewGistModal({
   };
 
   return (
-    <div
-      className="modal-overlay"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
-    >
-      <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
-        <h2>
+    <div className="modal-overlay modal-overlay--floating">
+      <div
+        className="modal modal--floating"
+        style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}
+      >
+        <h2 className="modal__drag-handle" onMouseDown={startDrag}>
           {template ? t.editor.newGistFromTemplate(template.name) : t.editor.newGistTitle}
         </h2>
         {template && (
