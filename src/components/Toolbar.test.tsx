@@ -37,6 +37,7 @@ function renderToolbar() {
   const cbs = {
     onSettings: vi.fn(), onPalette: vi.fn(), onImport: vi.fn(), onStats: vi.fn(),
     onShortcuts: vi.fn(), onTemplates: vi.fn(), onGraph: vi.fn(), onCleanup: vi.fn(),
+    onAbout: vi.fn(),
   };
   render(<Toolbar {...cbs} />);
   return cbs;
@@ -87,10 +88,12 @@ describe("Toolbar", () => {
     fireEvent.click(screen.getByText("Stats"));
     fireEvent.click(screen.getByText("Templates"));
     fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("About"));
     expect(cbs.onPalette).toHaveBeenCalled();
     expect(cbs.onStats).toHaveBeenCalled();
     expect(cbs.onTemplates).toHaveBeenCalled();
     expect(cbs.onSettings).toHaveBeenCalled();
+    expect(cbs.onAbout).toHaveBeenCalled();
   });
 
   it("Export saves to a chosen path and calls exportGists", async () => {

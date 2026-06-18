@@ -8,12 +8,12 @@ import { useT } from "../store/useI18nStore";
 import { AccountSwitcher } from "./AccountSwitcher";
 
 export function Toolbar({
-  onSettings, onPalette, onImport, onStats, onShortcuts, onTemplates, onGraph, onCleanup,
+  onSettings, onPalette, onImport, onStats, onShortcuts, onTemplates, onGraph, onCleanup, onAbout,
 }: {
   onSettings: () => void; onPalette: () => void;
   onImport: (filePath: string) => void; onStats: () => void;
   onShortcuts: () => void; onTemplates: () => void; onGraph: () => void;
-  onCleanup: () => void;
+  onCleanup: () => void; onAbout: () => void;
 }) {
   const t = useT();
   const { githubLogin, logout, sync, syncStatus, syncError, lastSyncResult } =
@@ -150,6 +150,9 @@ export function Toolbar({
         </button>
         <button className="toolbar__settings" data-testid="settings-btn" onClick={onSettings} title={t.toolbar.settings}>
           {t.toolbar.settings}
+        </button>
+        <button className="toolbar__export" data-testid="about-btn" onClick={onAbout} title={t.toolbar.aboutTitle}>
+          {t.toolbar.about}
         </button>
         {isLocalMode ? (
           <button className="toolbar__logout" onClick={handleConnectGitHub}>

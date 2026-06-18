@@ -13,6 +13,7 @@ import { LibraryCleanup } from "./LibraryCleanup";
 import { ShortcutsModal } from "./ShortcutsModal";
 import { TemplatesModal } from "./TemplatesModal";
 import { NewGistModal } from "./NewGistModal";
+import { AboutModal } from "./AboutModal";
 import { GraphView } from "./GraphView";
 import { useGistStore } from "../store/useGistStore";
 import type { Template } from "../api/tauri";
@@ -43,6 +44,7 @@ export function Layout() {
   const [showTemplates, setShowTemplates] = useState(false);
   const [pendingTemplate, setPendingTemplate] = useState<Template | null>(null);
   const [showNewGist, setShowNewGist] = useState(false);
+  const [showAbout, setShowAbout] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
   const [importPath, setImportPath] = useState<string | null>(null);
   const [showContentSearch, setShowContentSearch] = useState(false);
@@ -143,6 +145,7 @@ export function Layout() {
           onTemplates={() => setShowTemplates(true)}
           onGraph={() => setShowGraph(true)}
           onCleanup={() => setShowCleanup(true)}
+          onAbout={() => setShowAbout(true)}
         />
       )}
       {update && !updateDismissed && (
@@ -202,6 +205,7 @@ export function Layout() {
         />
       )}
       {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
       {showTemplates && (
         <TemplatesModal
           onClose={() => setShowTemplates(false)}

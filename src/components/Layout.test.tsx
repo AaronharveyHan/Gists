@@ -14,6 +14,7 @@ vi.mock("./Toolbar", () => ({
     <div data-testid="toolbar">
       <button onClick={() => p.onStats()}>stub-stats</button>
       <button onClick={() => p.onSettings()}>stub-settings</button>
+      <button onClick={() => p.onAbout()}>stub-about</button>
     </div>
   ),
 }));
@@ -33,6 +34,7 @@ vi.mock("./ContentSearch", () => ({ ContentSearch: () => <div data-testid="conte
 vi.mock("./StatsPanel", () => ({ StatsPanel: () => <div data-testid="stats-panel" /> }));
 vi.mock("./LibraryCleanup", () => ({ LibraryCleanup: () => <div data-testid="cleanup" /> }));
 vi.mock("./ShortcutsModal", () => ({ ShortcutsModal: () => <div data-testid="shortcuts" /> }));
+vi.mock("./AboutModal", () => ({ AboutModal: () => <div data-testid="about-modal" /> }));
 vi.mock("./TemplatesModal", () => ({ TemplatesModal: () => <div data-testid="templates" /> }));
 vi.mock("./GraphView", () => ({ GraphView: () => <div data-testid="graph" /> }));
 
@@ -139,5 +141,12 @@ describe("Layout", () => {
     render(<Layout />);
     fireEvent.click(screen.getByText("stub-settings"));
     expect(screen.getByTestId("settings-modal")).toBeTruthy();
+  });
+
+  it("opening About from the toolbar shows the about modal", () => {
+    render(<Layout />);
+    expect(screen.queryByTestId("about-modal")).toBeNull();
+    fireEvent.click(screen.getByText("stub-about"));
+    expect(screen.getByTestId("about-modal")).toBeTruthy();
   });
 });

@@ -787,6 +787,12 @@ kbd { font-family: var(--font-mono); font-size: 0.85em; background: var(--bg-2);
   -webkit-user-select: none;
 }
 
+/* ── About modal ──────────────────────────────────────────────────────────── */
+.about-modal__body { display: flex; flex-direction: column; gap: 14px; }
+.about-modal__version { font-size: 13px; font-weight: 600; color: var(--text-0); }
+.about-modal__update { min-height: 28px; display: flex; align-items: center; }
+.about-modal__links { display: flex; flex-direction: column; gap: 6px; }
+
 /* ── Import modal ─────────────────────────────────────────────────────────── */
 .import-modal { width: min(640px, 95vw); gap: 14px; }
 
