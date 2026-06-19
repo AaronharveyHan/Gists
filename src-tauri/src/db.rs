@@ -689,9 +689,16 @@ mod tests {
         wipe_schema(&conn).unwrap();
 
         let gists: i64 = conn.query_row("SELECT COUNT(*) FROM gists", [], |r| r.get(0)).unwrap();
-        let settings: i64 = conn.query_row("SELECT COUNT(*) FROM settings", [], |r| r.get(0)).unwrap();
         let accounts: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
-        assert_eq!((gists, settings, accounts), (0, 0, 0));
+        assert_eq!((gists, accounts), (0, 0));
+
+        // The user's token row is gone. The settings table is not empty — the
+        // re-run of apply_schema rewrites its own migration-version markers
+        // (fts_version, links_version) — but no user secret survives.
+        let token: Option<String> = conn
+            .query_row("SELECT value FROM settings WHERE key='token'", [], |r| r.get(0))
+            .ok();
+        assert_eq!(token, None);
 
         // Schema must still be fully usable afterwards (apply_schema reran).
         conn.execute(
