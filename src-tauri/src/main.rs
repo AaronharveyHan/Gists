@@ -217,6 +217,7 @@ fn main() {
             commands::get_token,
             commands::get_current_login,
             commands::clear_token,
+            commands::reset_app,
             commands::sync_gists,
             commands::list_gists,
             commands::search_gists,

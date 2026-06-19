@@ -12,6 +12,11 @@ vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
 vi.mock("../api/tauri");           // resolved by src/api/__mocks__/tauri.ts
 vi.mock("../lib/errorReporting", () => ({ initErrorReporting: vi.fn() }));
 
+const relaunchMock = vi.fn();
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: (...a: unknown[]) => relaunchMock(...a),
+}));
+
 // SettingsModal's AI config effect expects getAiConfig to resolve on mount.
 // The __mocks__ default handles this but we re-confirm it per-suite below.
 
@@ -34,6 +39,8 @@ describe("SettingsModal", () => {
     vi.mocked(tauriApi.localEmbeddingStatus).mockResolvedValue({
       dir: "", downloaded: false, loaded: false,
     });
+    vi.mocked(tauriApi.resetApp).mockResolvedValue(undefined);
+    relaunchMock.mockResolvedValue(undefined);
   });
   afterEach(() => cleanup());
 
@@ -185,5 +192,43 @@ describe("SettingsModal", () => {
       "error_reporting_enabled",
       "true"
     );
+  });
+
+  // ── Danger zone ──────────────────────────────────────────────────────────
+
+  it("Reset button is a no-op when the confirm is declined", async () => {
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
+    render(<SettingsModal onClose={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Erase all local data & sign out"));
+    });
+    expect(vi.mocked(tauriApi.resetApp)).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("Reset button calls resetApp and relaunches after confirmation", async () => {
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    render(<SettingsModal onClose={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Erase all local data & sign out"));
+    });
+    await waitFor(() => expect(vi.mocked(tauriApi.resetApp)).toHaveBeenCalledOnce());
+    await waitFor(() => expect(relaunchMock).toHaveBeenCalledOnce());
+    vi.unstubAllGlobals();
+  });
+
+  it("shows an error toast and re-enables the button when resetApp fails", async () => {
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    vi.mocked(tauriApi.resetApp).mockRejectedValue(new Error("ipc failed"));
+    render(<SettingsModal onClose={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByText("Erase all local data & sign out"));
+    });
+    await waitFor(() => {
+      const btn = screen.getByText("Erase all local data & sign out") as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+    expect(relaunchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
   });
 });

@@ -66,6 +66,9 @@ export const getCurrentLogin = (): Promise<string> =>
 
 export const clearToken = (): Promise<void> => invoke("clear_token");
 
+/** Factory reset: erases every stored credential and all local gist data. */
+export const resetApp = (): Promise<void> => invoke("reset_app");
+
 // ── Sync ──────────────────────────────────────────────────────────────────────
 
 export interface SyncResult {

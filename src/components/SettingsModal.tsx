@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-shell";
 import { useThemeStore, PRESETS } from "../store/useThemeStore";
-import { getSetting, saveSetting } from "../api/tauri";
+import { getSetting, saveSetting, resetApp } from "../api/tauri";
 import { useT, useI18nStore } from "../store/useI18nStore";
 import { initErrorReporting } from "../lib/errorReporting";
 import { notify } from "../store/useNotificationStore";
@@ -19,6 +19,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   } = useThemeStore();
 
   const [crashReporting, setCrashReporting] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     // get_setting returns Ok(None) when absent, so a rejection here is a real
@@ -51,6 +52,20 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [onClose]);
+
+  const handleResetApp = async () => {
+    if (!confirm(t.settings.resetAppConfirm)) return;
+    setResetting(true);
+    try {
+      await resetApp();
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (e) {
+      console.error("[settings] reset_app failed:", e);
+      notify(t.settings.resetAppFailed, "error");
+      setResetting(false);
+    }
+  };
 
   const preset = PRESETS[presetId];
   const showAccent = presetId !== "system";
@@ -266,6 +281,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 {t.settings.learnWhatIsSent}
               </button>
             </div>
+          </div>
+        </section>
+
+        {/* ── Danger zone ──────────────────────────────────────────── */}
+        <section className="settings-section">
+          <h3 className="settings-section__title">{t.settings.dangerZoneSection}</h3>
+          <p className="settings-hint">{t.settings.dangerZoneHint}</p>
+          <div className="settings-row">
+            <button
+              type="button"
+              className="btn btn--danger"
+              onClick={handleResetApp}
+              disabled={resetting}
+            >
+              {resetting ? t.common.loading : t.settings.resetAppButton}
+            </button>
           </div>
         </section>
 

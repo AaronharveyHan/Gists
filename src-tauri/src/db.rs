@@ -593,6 +593,42 @@ pub fn get_run(id: i64) -> Result<RunRecord> {
     })
 }
 
+// ── Factory reset ─────────────────────────────────────────────────────────────
+
+/// Drop every table on `conn` and recreate an empty schema. Extracted from
+/// [`wipe_all`] so it can be exercised against an isolated in-memory
+/// connection in tests, the same way [`apply_schema`] is.
+fn wipe_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "PRAGMA foreign_keys=OFF;
+         DROP TABLE IF EXISTS gist_links;
+         DROP TABLE IF EXISTS collection_gists;
+         DROP TABLE IF EXISTS collections;
+         DROP TABLE IF EXISTS template_files;
+         DROP TABLE IF EXISTS templates;
+         DROP TABLE IF EXISTS gist_embeddings;
+         DROP TABLE IF EXISTS files_remote_snapshot;
+         DROP TABLE IF EXISTS gist_tags;
+         DROP TABLE IF EXISTS tags;
+         DROP TABLE IF EXISTS gists_fts;
+         DROP TABLE IF EXISTS run_history;
+         DROP TABLE IF EXISTS files;
+         DROP TABLE IF EXISTS accounts;
+         DROP TABLE IF EXISTS settings;
+         DROP TABLE IF EXISTS gists;",
+    )?;
+    apply_schema(conn)
+}
+
+/// Drop every table and recreate an empty schema in place. Used by the
+/// "reset app" flow to erase all local gist data, settings, and account
+/// records in one step. Operates on the existing open connection rather than
+/// deleting the on-disk file, which avoids file-lock issues (esp. on Windows)
+/// since the singleton `DB` connection stays open for the process lifetime.
+pub fn wipe_all() -> Result<()> {
+    with_db(wipe_schema)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -626,6 +662,44 @@ mod tests {
             .query_row("SELECT value FROM settings WHERE key='links_version'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(links, "1");
+    }
+
+    #[test]
+    fn wipe_schema_erases_data_and_leaves_a_usable_empty_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_schema(&conn).unwrap();
+
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('g1', 'hi', datetime('now'), datetime('now'))",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('token', 'ghp_secret')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO accounts(name, token_key) VALUES('acct', 'k')",
+            [],
+        )
+        .unwrap();
+
+        wipe_schema(&conn).unwrap();
+
+        let gists: i64 = conn.query_row("SELECT COUNT(*) FROM gists", [], |r| r.get(0)).unwrap();
+        let settings: i64 = conn.query_row("SELECT COUNT(*) FROM settings", [], |r| r.get(0)).unwrap();
+        let accounts: i64 = conn.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get(0)).unwrap();
+        assert_eq!((gists, settings, accounts), (0, 0, 0));
+
+        // Schema must still be fully usable afterwards (apply_schema reran).
+        conn.execute(
+            "INSERT INTO gists(id, description, created_at, updated_at)
+             VALUES('g2', 'hi again', datetime('now'), datetime('now'))",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

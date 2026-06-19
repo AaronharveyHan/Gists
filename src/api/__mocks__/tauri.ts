@@ -25,6 +25,7 @@ export const setToken = vi.fn().mockResolvedValue("");
 export const getToken = vi.fn().mockResolvedValue(false);
 export const getCurrentLogin = vi.fn().mockResolvedValue("testuser");
 export const clearToken = vi.fn().mockResolvedValue(undefined);
+export const resetApp = vi.fn().mockResolvedValue(undefined);
 
 // ── Sync ─────────────────────────────────────────────────────────────────────
 export const syncGists = vi.fn().mockResolvedValue({ updated: 0, total: 0, incremental: true });

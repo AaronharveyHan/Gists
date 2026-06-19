@@ -87,6 +87,24 @@ pub async fn clear_token(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Factory reset: erases every locally stored credential and every byte of
+/// local gist data. Used so reinstalling the app doesn't silently sign the
+/// user back in — the OS keychain and the app-data SQLite DB both live
+/// outside the install directory and survive a plain uninstall.
+#[tauri::command]
+pub async fn reset_app(state: State<'_, AppState>) -> Result<(), String> {
+    let accounts = db::list_accounts().unwrap_or_default();
+
+    keyring_delete();
+    for acc in &accounts {
+        keyring_delete_for(&acc.token_key);
+    }
+
+    db::wipe_all().map_err(|e| e.to_string())?;
+    *state.token.lock().await = None;
+    Ok(())
+}
+
 // ── Sync ──────────────────────────────────────────────────────────────────────
 
 /// `force === true` (literal bool) → full sync; anything else → incremental.
